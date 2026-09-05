@@ -27,6 +27,8 @@ constexpr UINT StopMessage = WM_APP + 32;
 
 struct Entry {
     InstanceHandle handle{};
+    double applied = 0.0;
+    bool overridden = false;
     winrt::weak_ref<FrameworkElement> element;
     winrt::Windows::Foundation::IInspectable local{nullptr};
 };
@@ -44,6 +46,7 @@ class Tap final : public RuntimeClass<RuntimeClassFlags<ClassicCom>, IObjectWith
     std::set<InstanceHandle> matched;
     // Accessed only on the SetSite UI thread.
     std::vector<Entry> entries;
+    unsigned opacity = 0;
 
     void ReportError(HRESULT error) noexcept { PostMessageW(host, MsgError, static_cast<WPARAM>(error), 0); }
 
@@ -51,14 +54,27 @@ class Tap final : public RuntimeClass<RuntimeClassFlags<ClassicCom>, IObjectWith
         try {
             if (auto element = item.element.get()) {
                 // If another customizer took ownership, do not overwrite its value.
-                if (element.Opacity() != 0.0) return true;
+                if (!item.overridden) return true;
+                if (element.Opacity() != item.applied) { item.overridden = false; return true; }
                 if (item.local == DependencyProperty::UnsetValue()) element.ClearValue(UIElement::OpacityProperty());
                 else element.SetValue(UIElement::OpacityProperty(), item.local);
+                item.overridden = false;
             }
             return true;
         } catch (...) { ReportError(winrt::to_hresult()); return false; }
     }
 
+    void Update(Entry& item) noexcept {
+        if (opacity == 100) { Restore(item); return; }
+        try {
+            if (auto element = item.element.get()) {
+                if (item.overridden && element.Opacity() != item.applied) return;
+                item.applied = static_cast<double>(opacity) / 100.0;
+                item.overridden = true;
+                element.Opacity(item.applied);
+            }
+        } catch (...) { ReportError(winrt::to_hresult()); }
+    }
     void Apply(InstanceHandle handle) noexcept {
         if (stopping) return;
         for (const auto& item : entries) if (item.handle == handle) return;
@@ -76,9 +92,9 @@ class Tap final : public RuntimeClass<RuntimeClassFlags<ClassicCom>, IObjectWith
                 ReportError(E_NOTIMPL); // Do not replace a data binding/expression.
                 return;
             }
-            Entry saved{handle, winrt::make_weak(element), local};
+            Entry saved{handle, 0.0, false, winrt::make_weak(element), local};
             entries.push_back(saved); // Save rollback information before changing UI.
-            element.Opacity(0.0);
+            Update(entries.back());
             PostMessageW(host, MsgChanged, entries.size(), 0);
         } catch (...) { ReportError(winrt::to_hresult()); }
     }
@@ -90,6 +106,13 @@ class Tap final : public RuntimeClass<RuntimeClassFlags<ClassicCom>, IObjectWith
             SetWindowLongPtrW(wnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(self));
         }
         if (!self) return DefWindowProcW(wnd, message, wparam, lparam);
+        if (message == MsgSetOpacity) {
+            if (self->stopping || wparam > 100) return 0;
+            self->opacity = static_cast<unsigned>(wparam);
+            for (auto& item : self->entries) self->Update(item);
+            PostMessageW(self->host, MsgChanged, self->entries.size(), 0);
+            return 0;
+        }
         if (message == ApplyMessage) { self->Apply(static_cast<InstanceHandle>(wparam)); return 0; }
         if (message == RemoveMessage) {
             for (auto it = self->entries.begin(); it != self->entries.end(); ++it) {
@@ -122,7 +145,7 @@ class Tap final : public RuntimeClass<RuntimeClassFlags<ClassicCom>, IObjectWith
         const HRESULT initialized = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
         const HRESULT advised = self->tree->AdviseVisualTreeChange(self);
         if (FAILED(advised)) self->ReportError(advised);
-        else PostMessageW(self->host, MsgAttached, 0, 0);
+        else PostMessageW(self->host, MsgAttached, reinterpret_cast<WPARAM>(self->window), 0);
         if (SUCCEEDED(advised)) {
             HANDLE waits[]{self->hostProcess, self->stopEvent};
             WaitForMultipleObjects(2, waits, FALSE, INFINITE);

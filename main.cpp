@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "shared.h"
+#include "settings.h"
 #include <shellapi.h>
 #include <objbase.h>
 #include <ocidl.h>
@@ -27,11 +28,34 @@ bool attached = false;
 unsigned changed = 0;
 std::atomic<bool> attaching{false};
 NOTIFYICONDATAW icon{};
+Preferences preferences;
+HWND backend = nullptr;
+HWINEVENTHOOK foregroundHook = nullptr, locationHook = nullptr;
+unsigned effectiveOpacity = 0;
+void UpdateOpacity() {
+    const auto active = GetForegroundWindow();
+    effectiveOpacity = preferences.maximized && active && IsZoomed(active) ? 100U : preferences.opacity;
+    if (backend) PostMessageW(backend, MsgSetOpacity, effectiveOpacity, 0);
+}
+void CALLBACK WindowEvent(HWINEVENTHOOK, DWORD event, HWND window, LONG object, LONG, DWORD, DWORD) {
+    if (event == EVENT_SYSTEM_FOREGROUND || (object == OBJID_WINDOW && window == GetForegroundWindow()))
+        SetTimer(host, 4, 120, nullptr);
+}
+void ConfigureRule() {
+    if (foregroundHook) UnhookWinEvent(foregroundHook);
+    if (locationHook) UnhookWinEvent(locationHook);
+    foregroundHook = nullptr; locationHook = nullptr;
+    if (preferences.maximized) {
+        foregroundHook = SetWinEventHook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND, nullptr, WindowEvent, 0, 0, WINEVENT_OUTOFCONTEXT);
+        locationHook = SetWinEventHook(EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_LOCATIONCHANGE, nullptr, WindowEvent, 0, 0, WINEVENT_OUTOFCONTEXT);
+    }
+    UpdateOpacity();
+}
 
 void Status(const char* state, HRESULT result = S_OK) noexcept {
     try {
         std::ofstream file(folder / L"status.txt", std::ios::trunc);
-        file << "LiteTaskbar 0.2.1 experimental\nstate=" << state
+        file << "LiteTaskbar 0.3.0 experimental\nstate=" << state
              << "\nhost_pid=" << GetCurrentProcessId() << "\nexplorer_pid=" << shellPid
              << "\nbackground_elements=" << changed << "\nhresult=0x" << std::hex
              << static_cast<unsigned long>(result) << '\n';
@@ -43,9 +67,12 @@ void AddTray() {
     icon.uID = 1;
     icon.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
     icon.uCallbackMessage = TrayMessage;
-    icon.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
+    icon.hIcon = LoadIconW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(101));
     wcscpy_s(icon.szTip, L"LiteTaskbar - experimental taskbar transparency");
-    Shell_NotifyIconW(NIM_ADD, &icon);
+    if (Shell_NotifyIconW(NIM_ADD, &icon)) {
+        icon.uVersion = NOTIFYICON_VERSION_4;
+        Shell_NotifyIconW(NIM_SETVERSION, &icon);
+    } else ShowSettings(host, preferences);
 }
 DWORD WINAPI Attach(void*) noexcept {
     HRESULT result = E_FAIL;
@@ -108,13 +135,17 @@ LRESULT CALLBACK WindowProc(HWND wnd, UINT message, WPARAM wparam, LPARAM lparam
         return 0;
     }
     switch (message) {
+    case ShowSettingsMessage: ShowSettings(host, preferences); return 0;
+    case SettingsApply:
+        if (wparam <= 100) { preferences.opacity = static_cast<unsigned>(wparam); preferences.maximized = lparam != 0; ConfigureRule(); }
+        return 0;
     case WM_CLOSE: Quit(); return 0;
     case WM_QUERYENDSESSION: SetEvent(stopEvent); return TRUE;
-    case MsgAttached: attached = true; if (quitting) SetEvent(stopEvent); return 0;
+    case MsgAttached: backend = reinterpret_cast<HWND>(wparam); UpdateOpacity(); attached = true; if (quitting) SetEvent(stopEvent); return 0;
     case MsgChanged:
         changed = static_cast<unsigned>(wparam);
         if (changed) KillTimer(wnd, Deadline);
-        Status(changed ? "transparent" : "no_background_elements");
+        Status(changed ? (effectiveOpacity == 100 ? "system_default" : "custom_background") : "no_background_elements");
         return 0;
     case MsgError: Status("backend_error", static_cast<HRESULT>(wparam)); return 0;
     case MsgRestored:
@@ -131,6 +162,7 @@ LRESULT CALLBACK WindowProc(HWND wnd, UINT message, WPARAM wparam, LPARAM lparam
         }
         return 0;
     case WM_TIMER:
+        if (wparam == 4) { KillTimer(wnd, 4); UpdateOpacity(); return 0; }
         if (wparam == Deadline) {
             KillTimer(wnd, Deadline);
             if (!changed) {
@@ -147,9 +179,10 @@ LRESULT CALLBACK WindowProc(HWND wnd, UINT message, WPARAM wparam, LPARAM lparam
         }
         return 0;
     case TrayMessage:
-        if (lparam == WM_RBUTTONUP || lparam == WM_LBUTTONUP) {
+        if (LOWORD(lparam) == NIN_SELECT || LOWORD(lparam) == NIN_KEYSELECT) { ShowSettings(host, preferences); return 0; }
+        if (LOWORD(lparam) == WM_CONTEXTMENU || LOWORD(lparam) == WM_RBUTTONUP) {
             HMENU menu = CreatePopupMenu();
-            AppendMenuW(menu, MF_STRING, 1, L"查看状态");
+            AppendMenuW(menu, MF_STRING, 1, L"打开设置");
             AppendMenuW(menu, MF_STRING, 2, L"退出并恢复任务栏");
             POINT p{}; GetCursorPos(&p); SetForegroundWindow(wnd);
             const auto selected = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_NONOTIFY,
@@ -157,10 +190,10 @@ LRESULT CALLBACK WindowProc(HWND wnd, UINT message, WPARAM wparam, LPARAM lparam
             DestroyMenu(menu);
             PostMessageW(wnd, WM_NULL, 0, 0);
             if (selected == 2) Quit();
-            else if (selected == 1) ShellExecuteW(wnd, L"open", (folder / L"status.txt").c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+            else if (selected == 1) ShowSettings(host, preferences);
         }
         return 0;
-    case WM_DESTROY: Shell_NotifyIconW(NIM_DELETE, &icon); PostQuitMessage(0); return 0;
+    case WM_DESTROY: CloseSettings(); if (foregroundHook) UnhookWinEvent(foregroundHook); if (locationHook) UnhookWinEvent(locationHook); Shell_NotifyIconW(NIM_DELETE, &icon); PostQuitMessage(0); return 0;
     }
     return DefWindowProcW(wnd, message, wparam, lparam);
 }
@@ -197,12 +230,13 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR command, int) {
         if (existing) PostMessageW(existing, WM_CLOSE, 0, 0);
         return existing ? 0 : 1;
     }
-    if (*command) return 2;
+    const bool background = wcscmp(command, L"--background") == 0;
+    if (*command && !background) return 2;
     // A tray-only application has no text input. Avoid loading IME components.
     ImmDisableIME(GetCurrentThreadId());
     HANDLE singleton = CreateMutexW(nullptr, FALSE, L"Local\\LiteTaskbar.Host.Singleton");
     if (!singleton) return 3;
-    if (GetLastError() == ERROR_ALREADY_EXISTS) { CloseHandle(singleton); return 0; }
+    if (GetLastError() == ERROR_ALREADY_EXISTS) { if (!background) PostMessageW(FindWindowW(HostClass, nullptr), ShowSettingsMessage, 0, 0); CloseHandle(singleton); return 0; }
     wchar_t path[32768]{};
     const DWORD length = GetModuleFileNameW(nullptr, path, 32768);
     if (!length || length >= 32768) { CloseHandle(singleton); return 4; }
@@ -222,9 +256,11 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR command, int) {
                            0, 0, 0, 0, nullptr, nullptr, instance, nullptr);
     if (!host) { CloseHandle(stopEvent); CloseHandle(singleton); return 8; }
     taskbarCreated = RegisterWindowMessageW(L"TaskbarCreated");
-    AddTray(); StartAttach();
+    preferences = LoadPreferences();
+    AddTray(); ConfigureRule(); StartAttach();
+    if (!background) ShowSettings(host, preferences);
     MSG message{};
-    while (GetMessageW(&message, nullptr, 0, 0) > 0) { TranslateMessage(&message); DispatchMessageW(&message); }
+    while (GetMessageW(&message, nullptr, 0, 0) > 0) { if (!SettingsMessage(&message)) { TranslateMessage(&message); DispatchMessageW(&message); } }
     SetEvent(stopEvent);
     CloseHandle(stopEvent);
     CloseHandle(singleton);
