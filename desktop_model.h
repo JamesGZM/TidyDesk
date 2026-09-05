@@ -14,7 +14,8 @@ bool NewBox(HWND owner, bool existing);
 void Start(HWND owner);
 void Stop();
 void Notify();
-HRESULT Transfer(HWND owner, const std::vector<std::wstring>& paths, const std::wstring& destination);
+HRESULT Transfer(HWND owner, const std::vector<std::wstring>& paths, const std::wstring& destination, bool executableLinks=true);
+bool Dissolve(HWND owner, const std::wstring& id);
 int ModelTest();
 int TransferTest();
 }

@@ -6,6 +6,7 @@
 #include <fstream>
 #include <cstdio>
 #include <algorithm>
+#include <commctrl.h>
 using Microsoft::WRL::ComPtr;
 namespace desk {
 namespace {
@@ -46,6 +47,11 @@ bool Save(const std::vector<Box>& boxes) {
  }catch(...){return false;}
 }
 void Notify(){if(auto w=FindWindowW(L"TidyDesk.Desktop.Controller",nullptr))PostMessageW(w,WM_APP+1,0,0);}
+bool Dissolve(HWND owner,const std::wstring& id){auto boxes=Load();auto found=std::find_if(boxes.begin(),boxes.end(),[&](const Box& b){return b.id==id;});if(found==boxes.end())return false;
+ const auto folder=found->path;TASKDIALOG_BUTTON buttons[]={{100,L"将内容移回桌面"},{101,L"保留在原文件夹"}};TASKDIALOGCONFIG config{sizeof(config)};config.hwndParent=owner;config.dwFlags=TDF_USE_COMMAND_LINKS;config.dwCommonButtons=TDCBF_CANCEL_BUTTON;config.pszWindowTitle=L"解散收纳框";config.pszMainInstruction=L"解散后如何保留文件？";config.pszContent=L"只移除收纳框，不删除文件。文件冲突由 Windows 处理。";config.cButtons=2;config.pButtons=buttons;int choice=0;if(FAILED(TaskDialogIndirect(&config,&choice,nullptr,nullptr))||(choice!=100&&choice!=101))return false;
+ if(choice==100){std::error_code ec;std::vector<std::wstring> files;for(auto& entry:std::filesystem::directory_iterator(folder,ec))files.push_back(entry.path().wstring());if(ec){MessageBoxW(owner,L"无法读取收纳文件夹，未解散。",L"TidyDesk",MB_OK|MB_ICONERROR);return false;}auto hr=Transfer(owner,files,Known(FOLDERID_Desktop).wstring(),false);if(FAILED(hr)){if(hr!=HRESULT_FROM_WIN32(ERROR_CANCELLED))MessageBoxW(owner,L"部分文件未能移回桌面，收纳框已保留。",L"TidyDesk",MB_OK|MB_ICONERROR);return false;}}
+ boxes=Load();boxes.erase(std::remove_if(boxes.begin(),boxes.end(),[&](const Box& b){return b.id==id;}),boxes.end());if(!Save(boxes)){MessageBoxW(owner,L"无法保存布局，未完成解散。",L"TidyDesk",MB_OK|MB_ICONERROR);return false;}Notify();return true;
+}
 void Start(HWND owner){if(FindWindowW(L"TidyDesk.Desktop.Controller",nullptr))return;wchar_t exe[32768]{};GetModuleFileNameW(nullptr,exe,32768);auto file=std::filesystem::path(exe).parent_path()/L"TidyDeskDesktop.exe";SHELLEXECUTEINFOW info{sizeof(info)};info.hwnd=owner;info.lpFile=file.c_str();info.nShow=SW_SHOWNOACTIVATE;ShellExecuteExW(&info);}
 void Stop(){if(auto w=FindWindowW(L"TidyDesk.Desktop.Controller",nullptr))PostMessageW(w,WM_CLOSE,0,0);}
 bool NewBox(HWND owner,bool existing){
@@ -60,12 +66,12 @@ bool NewBox(HWND owner,bool existing){
  if(!duplicate&&boxes.size()<64){boxes.push_back(b);result=Save(boxes);if(result)Notify();}else MessageBoxW(owner,L"这个文件夹已经有收纳框，或已达到 64 个框的上限。",L"TidyDesk",MB_OK);}}}}
  if(SUCCEEDED(com))CoUninitialize();return result;
 }
-HRESULT Transfer(HWND owner,const std::vector<std::wstring>& paths,const std::wstring& destination){
+HRESULT Transfer(HWND owner,const std::vector<std::wstring>& paths,const std::wstring& destination,bool executableLinks){
  ComPtr<IFileOperation> op;HRESULT hr=CoCreateInstance(CLSID_FileOperation,nullptr,CLSCTX_INPROC_SERVER,IID_PPV_ARGS(&op));if(FAILED(hr))return hr;
  op->SetOwnerWindow(owner);op->SetOperationFlags(FOF_ALLOWUNDO|FOFX_ADDUNDORECORD|FOF_NOCONFIRMMKDIR);
  ComPtr<IShellItem> dest;hr=SHCreateItemFromParsingName(destination.c_str(),nullptr,IID_PPV_ARGS(&dest));if(FAILED(hr))return hr;
  for(const auto& path:paths){std::filesystem::path src(path);if(_wcsicmp(src.parent_path().c_str(),destination.c_str())==0)continue;
- if(_wcsicmp(src.extension().c_str(),L".exe")==0){ComPtr<IShellLinkW> link;hr=CoCreateInstance(CLSID_ShellLink,nullptr,CLSCTX_INPROC_SERVER,IID_PPV_ARGS(&link));if(FAILED(hr))return hr;link->SetPath(path.c_str());link->SetWorkingDirectory(src.parent_path().c_str());ComPtr<IPersistFile> persist;hr=link.As(&persist);if(FAILED(hr))return hr;
+ if(executableLinks&&_wcsicmp(src.extension().c_str(),L".exe")==0){ComPtr<IShellLinkW> link;hr=CoCreateInstance(CLSID_ShellLink,nullptr,CLSCTX_INPROC_SERVER,IID_PPV_ARGS(&link));if(FAILED(hr))return hr;link->SetPath(path.c_str());link->SetWorkingDirectory(src.parent_path().c_str());ComPtr<IPersistFile> persist;hr=link.As(&persist);if(FAILED(hr))return hr;
  auto name=std::filesystem::path(destination)/(src.stem().wstring()+L".lnk");for(int n=2;std::filesystem::exists(name);++n)name=std::filesystem::path(destination)/(src.stem().wstring()+L" ("+std::to_wstring(n)+L").lnk");hr=persist->Save(name.c_str(),TRUE);if(FAILED(hr))return hr;
  }else{ComPtr<IShellItem> item;hr=SHCreateItemFromParsingName(path.c_str(),nullptr,IID_PPV_ARGS(&item));if(FAILED(hr))return hr;hr=op->MoveItem(item.Get(),dest.Get(),nullptr,nullptr);if(FAILED(hr))return hr;}}
  hr=op->PerformOperations();BOOL aborted=FALSE;op->GetAnyOperationsAborted(&aborted);return aborted?HRESULT_FROM_WIN32(ERROR_CANCELLED):hr;

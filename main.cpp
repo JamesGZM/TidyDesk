@@ -90,7 +90,7 @@ void Status(const char* state, HRESULT result = S_OK) noexcept {
         std::ofstream file(folder / L"status.txt", std::ios::trunc);
         BOOL inJob = FALSE;
         const BOOL jobKnown = IsProcessInJob(GetCurrentProcess(), nullptr, &inJob);
-        file << "TidyDesk 0.4.3 experimental\nstate=" << state
+        file << "TidyDesk 0.4.4 experimental\nstate=" << state
              << "\nhost_pid=" << GetCurrentProcessId() << "\nexplorer_pid=" << shellPid
              << "\nbackground_elements=" << changed << "\nmaximized_rule=" << preferences.maximized
              << "\nrequested_opacity=" << preferences.opacity << "\neffective_opacity=" << effectiveOpacity
