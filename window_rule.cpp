@@ -34,18 +34,11 @@ bool Transient(HWND window) {
         shellFlyout || SameClass(window, L"LiteTaskbar.Settings") || SameClass(window, L"TidyDesk.Settings") ||
         (GetWindowLongPtrW(window, GWL_EXSTYLE) & (WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE));
 }
-bool MaximizedOrFillsWorkArea(HWND window) {
+bool ActuallyMaximized(HWND window) {
     if (!Usable(window)) return false;
-    if (IsZoomed(window)) return true;
-    RECT bounds{};
-    if (FAILED(DwmGetWindowAttribute(window, DWMWA_EXTENDED_FRAME_BOUNDS, &bounds, sizeof(bounds))) &&
-        !GetWindowRect(window, &bounds)) return false;
-    MONITORINFO monitor{sizeof(monitor)};
-    if (!GetMonitorInfoW(MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST), &monitor)) return false;
-    // Some borderless/custom-titlebar apps fill the work area without WS_MAXIMIZE.
-    constexpr LONG tolerance = 2;
-    return bounds.left <= monitor.rcWork.left + tolerance && bounds.top <= monitor.rcWork.top + tolerance &&
-        bounds.right >= monitor.rcWork.right - tolerance && bounds.bottom >= monitor.rcWork.bottom - tolerance;
+    // Window bounds are not a maximized-state signal: ordinary resized windows
+    // and full-screen overlays can cover the work area without being maximized.
+    return IsZoomed(window) != FALSE;
 }
 }
 bool HasMaximizedWindow(DWORD onlyProcess) {
@@ -58,7 +51,7 @@ bool HasMaximizedWindow(DWORD onlyProcess) {
         }
         if (GetAncestor(window, GA_ROOT) != window || !Usable(window) || Transient(window) ||
             SameClass(window, L"Progman") || SameClass(window, L"WorkerW")) return TRUE;
-        if (MaximizedOrFillsWorkArea(window)) { scan.found = true; return FALSE; }
+        if (ActuallyMaximized(window)) { scan.found = true; return FALSE; }
         return TRUE;
     }, reinterpret_cast<LPARAM>(&query));
     return query.found;
@@ -98,8 +91,8 @@ int TestWindowRule() {
             monitor.rcWork.right - monitor.rcWork.left, monitor.rcWork.bottom - monitor.rcWork.top,
             SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
         DwmFlush();
-        const bool borderless = HasMaximizedWindow(pid);
-        result = behindNormal && behindDialog && !allNormal && secondMax && !hidden && borderless ? 0 : 2;
+        const bool manuallySized = HasMaximizedWindow(pid);
+        result = behindNormal && behindDialog && !allNormal && secondMax && !hidden && !manuallySized ? 0 : 2;
     }
     if (tool) DestroyWindow(tool);
     if (dialog) DestroyWindow(dialog);

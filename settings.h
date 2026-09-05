@@ -10,3 +10,4 @@ inline constexpr UINT SettingsApply = WM_APP + 40;
 inline constexpr UINT ShowSettingsMessage = WM_APP + 41;
 inline constexpr UINT SettingsRetry = WM_APP + 42;
 void SettingsStatus(const wchar_t* text);
+int TestSettings();

@@ -28,6 +28,7 @@ UINT taskbarCreated = 0;
 bool quitting = false;
 bool attached = false;
 bool backendFailed = false;
+bool retryAfterRestore = false;
 unsigned changed = 0;
 std::atomic<bool> attaching{false};
 NOTIFYICONDATAW icon{};
@@ -41,7 +42,7 @@ HWND lastSentBackend = nullptr;
 unsigned lastSentOpacity = 101;
 void UpdateOpacity() {
     effectiveOpacity = preferences.maximized && HasMaximizedWindow() ? 100U : preferences.opacity;
-    if (backend && (backend != lastSentBackend || effectiveOpacity != lastSentOpacity)) {
+    if (backend && !backendFailed && (backend != lastSentBackend || effectiveOpacity != lastSentOpacity)) {
         if (PostMessageW(backend, MsgSetOpacity, effectiveOpacity, 0)) {
             lastSentBackend = backend;
             lastSentOpacity = effectiveOpacity;
@@ -79,7 +80,7 @@ void Status(const char* state, HRESULT result = S_OK) noexcept {
         std::ofstream file(folder / L"status.txt", std::ios::trunc);
         BOOL inJob = FALSE;
         const BOOL jobKnown = IsProcessInJob(GetCurrentProcess(), nullptr, &inJob);
-        file << "TidyDesk 0.4.1 experimental\nstate=" << state
+        file << "TidyDesk 0.4.2 experimental\nstate=" << state
              << "\nhost_pid=" << GetCurrentProcessId() << "\nexplorer_pid=" << shellPid
              << "\nbackground_elements=" << changed << "\nmaximized_rule=" << preferences.maximized
              << "\nrequested_opacity=" << preferences.opacity << "\neffective_opacity=" << effectiveOpacity
@@ -134,11 +135,12 @@ void StartAttach() {
     DWORD pid = 0;
     if (taskbar) GetWindowThreadProcessId(taskbar, &pid);
     if (!pid) { attaching = false; Status("taskbar_not_found"); return; }
-    if (pid == shellPid && attached) { attaching = false; return; }
+    if (pid == shellPid && attached && !backendFailed && IsWindow(backend)) { attaching = false; return; }
     shellPid = pid;
     changed = 0;
     attached = false;
     backend = nullptr;
+    lastSentBackend = nullptr; lastSentOpacity = 101;
     backendFailed = false;
     ResetEvent(stopEvent);
     Status("attaching");
@@ -146,6 +148,11 @@ void StartAttach() {
     HANDLE thread = CreateThread(nullptr, 0, Attach, nullptr, 0, nullptr);
     if (thread) CloseHandle(thread);
     else { attaching = false; KillTimer(host, Deadline); Status("thread_failed", HRESULT_FROM_WIN32(GetLastError())); }
+}
+void RetryTaskbar() {
+    SettingsStatus(L"正在应用…");
+    if (attached || backend) { retryAfterRestore = true; SetEvent(stopEvent); }
+    else StartAttach();
 }
 void Quit() {
     if (quitting) return;
@@ -166,17 +173,17 @@ LRESULT CALLBACK WindowProc(HWND wnd, UINT message, WPARAM wparam, LPARAM lparam
     }
     switch (message) {
     case ShowSettingsMessage: ShowSettings(host, preferences); return 0;
-    case SettingsRetry: StartAttach(); return 0;
+    case SettingsRetry: RetryTaskbar(); return 0;
     case SettingsApply:
-        if (wparam <= 100) { preferences.opacity = static_cast<unsigned>(wparam); preferences.maximized = lparam != 0; ConfigureRule(); }
+        if (wparam <= 100) { preferences.opacity = static_cast<unsigned>(wparam); preferences.maximized = lparam != 0; lastSentOpacity = 101; ConfigureRule(); if (!attached || backendFailed) RetryTaskbar(); }
         return attached && !backendFailed ? 1 : 0;
     case WM_CLOSE: Quit(); return 0;
     case WM_QUERYENDSESSION: SetEvent(stopEvent); return TRUE;
     case WM_APP + 15: Status("backend_stage", static_cast<HRESULT>(wparam)); return 0;
-    case MsgAttached: backend = reinterpret_cast<HWND>(wparam); Status("attached"); UpdateOpacity(); attached = true; SettingsStatus(L"任务栏已连接，等待背景确认"); if (quitting) SetEvent(stopEvent); return 0;
+    case MsgAttached: backend = reinterpret_cast<HWND>(wparam); lastSentBackend = nullptr; lastSentOpacity = 101; attached = true; Status("attached"); SettingsStatus(L"正在应用…"); UpdateOpacity(); if (quitting) SetEvent(stopEvent); return 0;
     case MsgChanged:
         changed = static_cast<unsigned>(wparam);
-        SettingsStatus(changed ? (effectiveOpacity == 100 ? L"已生效：系统背景" : L"已生效：自定义背景") : L"已连接，但未找到背景元素");
+        SettingsStatus(backendFailed?L"应用失败，请重试。":changed?L"应用成功":L"正在应用…");
         if (changed) KillTimer(wnd, Deadline);
         Status(changed ? (effectiveOpacity == 100 ? "system_default" : "custom_background") : "no_background_elements");
         return 0;
@@ -184,12 +191,13 @@ LRESULT CALLBACK WindowProc(HWND wnd, UINT message, WPARAM wparam, LPARAM lparam
         backendFailed = true;
         KillTimer(wnd, Deadline);
         Status("backend_error", static_cast<HRESULT>(wparam));
-        SettingsStatus(L"任务栏连接失败：设置已保留，可手动重连或查看诊断日志。");
+        SettingsStatus(L"应用失败，请重试。");
         return 0;
     case MsgRestored:
         changed = 0;
         attached = false;
-        backend = nullptr;
+        backend = nullptr; lastSentBackend = nullptr; lastSentOpacity = 101;
+        if (retryAfterRestore && !quitting) { retryAfterRestore = false; StartAttach(); }
         if (!backendFailed || quitting) Status(wparam ? "restore_failed" : "restored", wparam ? E_FAIL : S_OK);
         if (quitting) DestroyWindow(wnd);
         return 0;
@@ -197,7 +205,7 @@ LRESULT CALLBACK WindowProc(HWND wnd, UINT message, WPARAM wparam, LPARAM lparam
         if (FAILED(static_cast<HRESULT>(wparam))) {
             KillTimer(wnd, Deadline);
             Status("attach_failed", static_cast<HRESULT>(wparam));
-            SettingsStatus(L"无法连接任务栏；未持续重试。请查看诊断日志。");
+            SettingsStatus(L"应用失败，请重试。");
         }
         return 0;
     case WM_TIMER:
@@ -207,7 +215,7 @@ LRESULT CALLBACK WindowProc(HWND wnd, UINT message, WPARAM wparam, LPARAM lparam
             if (!changed) {
                 Status("no_supported_background_found");
                 SetEvent(stopEvent);
-                SettingsStatus(L"未找到支持的任务栏背景，本次连接已停止。");
+                SettingsStatus(L"应用失败：当前系统未能完成任务栏设置。");
             }
         } else if (wparam == ShutdownDeadline) {
             Status("exit_restore_not_confirmed");
@@ -238,6 +246,7 @@ LRESULT CALLBACK WindowProc(HWND wnd, UINT message, WPARAM wparam, LPARAM lparam
 }
 }
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR command, int) {
+    if (wcscmp(command, L"--test-settings") == 0) return TestSettings();
     if (wcscmp(command, L"--test-window-rule") == 0) return TestWindowRule();
     if (wcscmp(command, L"--self-test") == 0) {
         wchar_t testPath[32768]{};
@@ -272,8 +281,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR command, int) {
     }
     const bool background = wcscmp(command, L"--background") == 0;
     if (*command && !background) return 2;
-    // A tray-only application has no text input. Avoid loading IME components.
-    ImmDisableIME(GetCurrentThreadId());
+    // Settings contain editable Chinese names; keep the normal IME available.
     HANDLE singleton = CreateMutexW(nullptr, FALSE, L"Local\\LiteTaskbar.Host.Singleton");
     if (!singleton) return 3;
     if (GetLastError() == ERROR_ALREADY_EXISTS) { if (!background) PostMessageW(FindWindowW(HostClass, nullptr), ShowSettingsMessage, 0, 0); CloseHandle(singleton); return 0; }
