@@ -3,3 +3,4 @@
 /.vs/
 *.user
 *.pdb
+/status.txt
