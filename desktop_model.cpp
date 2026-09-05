@@ -49,6 +49,8 @@ void Notify(){if(auto w=FindWindowW(L"TidyDesk.Desktop.Controller",nullptr))Post
 void Start(HWND owner){if(FindWindowW(L"TidyDesk.Desktop.Controller",nullptr))return;wchar_t exe[32768]{};GetModuleFileNameW(nullptr,exe,32768);auto file=std::filesystem::path(exe).parent_path()/L"TidyDeskDesktop.exe";SHELLEXECUTEINFOW info{sizeof(info)};info.hwnd=owner;info.lpFile=file.c_str();info.nShow=SW_SHOWNOACTIVATE;ShellExecuteExW(&info);}
 void Stop(){if(auto w=FindWindowW(L"TidyDesk.Desktop.Controller",nullptr))PostMessageW(w,WM_CLOSE,0,0);}
 bool NewBox(HWND owner,bool existing){
+ if(!existing){wchar_t exe[32768]{};GetModuleFileNameW(nullptr,exe,32768);auto file=std::filesystem::path(exe).parent_path()/L"TidyDeskDesktop.exe";return reinterpret_cast<INT_PTR>(ShellExecuteW(owner,L"open",file.c_str(),L"--new",nullptr,SW_SHOWNORMAL))>32;}
+
  const HRESULT com=CoInitializeEx(nullptr,COINIT_APARTMENTTHREADED);bool result=false;
  {ComPtr<IFileDialog> picker;if(SUCCEEDED(CoCreateInstance(CLSID_FileOpenDialog,nullptr,CLSCTX_INPROC_SERVER,IID_PPV_ARGS(&picker)))){
  DWORD flags=0;picker->GetOptions(&flags);picker->SetOptions(flags|FOS_PICKFOLDERS|FOS_FORCEFILESYSTEM);picker->SetTitle(existing?L"选择要显示的分类文件夹":L"选择或新建一个分类文件夹（右键 → 新建文件夹）");

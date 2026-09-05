@@ -1,5 +1,5 @@
 ; SPDX-License-Identifier: MIT
-#define AppVersion "0.4.0"
+#define AppVersion "0.4.1"
 [Setup]
 AppId={{F33B8E61-F180-40F4-9377-455BBBCE67A1}
 AppName=TidyDesk
@@ -41,6 +41,11 @@ Source: "blank.ico"; DestDir: "{app}"; Flags: ignoreversion uninsneveruninstall
 Source: "LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 Source: "README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "INSTALL-NOTES.txt"; DestDir: "{app}"; Flags: ignoreversion
+
+[Registry]
+Root: HKCU; Subkey: "Software\Classes\DesktopBackground\Shell\TidyDesk.New"; ValueType: string; ValueName: ""; ValueData: "新建收纳框"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\DesktopBackground\Shell\TidyDesk.New"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\{#AppVersion}\TidyDesk.exe,0"
+Root: HKCU; Subkey: "Software\Classes\DesktopBackground\Shell\TidyDesk.New\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppVersion}\TidyDeskDesktop.exe"" --new"
 
 [Icons]
 Name: "{group}\TidyDesk"; Filename: "{app}\{#AppVersion}\TidyDesk.exe"; WorkingDir: "{app}\{#AppVersion}"
