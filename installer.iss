@@ -78,13 +78,14 @@ begin
 end;
 
 procedure RemoveOldShortcut(const Path: String);
-var Shell, Link: Variant;
+var Shell, Link: Variant; Target: String;
 begin
   if not FileExists(Path) then Exit;
   try
     Shell := CreateOleObject('WScript.Shell');
     Link := Shell.CreateShortcut(Path);
-    if Pos(Lowercase(AddBackslash(ExpandConstant('{app}'))), Lowercase(Link.TargetPath)) = 1 then DeleteFile(Path);
+    Target := Link.TargetPath;
+    if Pos(Lowercase(AddBackslash(ExpandConstant('{app}'))), Lowercase(Target)) = 1 then DeleteFile(Path);
   except
     Log('Old shortcut could not be inspected; preserved.');
   end;

@@ -16,4 +16,5 @@ void Stop();
 void Notify();
 HRESULT Transfer(HWND owner, const std::vector<std::wstring>& paths, const std::wstring& destination);
 int ModelTest();
+int TransferTest();
 }
