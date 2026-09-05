@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include "shared.h"
 #include "settings.h"
+#include "window_rule.h"
 #include <shellapi.h>
 #include <objbase.h>
 #include <ocidl.h>
@@ -32,23 +33,38 @@ NOTIFYICONDATAW icon{};
 Preferences preferences;
 HWND backend = nullptr;
 HWINEVENTHOOK foregroundHook = nullptr, locationHook = nullptr;
+HWINEVENTHOOK minimizeHook = nullptr, lifetimeHook = nullptr;
+ForegroundRule foregroundRule;
 unsigned effectiveOpacity = 0;
+HWND lastSentBackend = nullptr;
+unsigned lastSentOpacity = 101;
 void UpdateOpacity() {
     const auto active = GetForegroundWindow();
-    effectiveOpacity = preferences.maximized && active && IsZoomed(active) ? 100U : preferences.opacity;
-    if (backend) PostMessageW(backend, MsgSetOpacity, effectiveOpacity, 0);
+    effectiveOpacity = preferences.maximized && foregroundRule.Evaluate(active) ? 100U : preferences.opacity;
+    if (backend && (backend != lastSentBackend || effectiveOpacity != lastSentOpacity)) {
+        if (PostMessageW(backend, MsgSetOpacity, effectiveOpacity, 0)) {
+            lastSentBackend = backend;
+            lastSentOpacity = effectiveOpacity;
+        }
+    }
 }
 void CALLBACK WindowEvent(HWINEVENTHOOK, DWORD event, HWND window, LONG object, LONG, DWORD, DWORD) {
-    if (event == EVENT_SYSTEM_FOREGROUND || (object == OBJID_WINDOW && window == GetForegroundWindow()))
+    if (event == EVENT_SYSTEM_FOREGROUND || event == EVENT_SYSTEM_MINIMIZESTART || event == EVENT_SYSTEM_MINIMIZEEND ||
+        (object == OBJID_WINDOW && (window == GetForegroundWindow() || window == foregroundRule.TrackedWindow())))
         SetTimer(host, 4, 120, nullptr);
 }
 void ConfigureRule() {
     if (foregroundHook) UnhookWinEvent(foregroundHook);
     if (locationHook) UnhookWinEvent(locationHook);
+    if (minimizeHook) UnhookWinEvent(minimizeHook);
+    if (lifetimeHook) UnhookWinEvent(lifetimeHook);
+    minimizeHook = nullptr; lifetimeHook = nullptr;
     foregroundHook = nullptr; locationHook = nullptr;
     if (preferences.maximized) {
         foregroundHook = SetWinEventHook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND, nullptr, WindowEvent, 0, 0, WINEVENT_OUTOFCONTEXT);
         locationHook = SetWinEventHook(EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_LOCATIONCHANGE, nullptr, WindowEvent, 0, 0, WINEVENT_OUTOFCONTEXT);
+        minimizeHook = SetWinEventHook(EVENT_SYSTEM_MINIMIZESTART, EVENT_SYSTEM_MINIMIZEEND, nullptr, WindowEvent, 0, 0, WINEVENT_OUTOFCONTEXT);
+        lifetimeHook = SetWinEventHook(EVENT_OBJECT_DESTROY, EVENT_OBJECT_HIDE, nullptr, WindowEvent, 0, 0, WINEVENT_OUTOFCONTEXT);
     }
     UpdateOpacity();
 }
@@ -63,7 +79,9 @@ void Status(const char* state, HRESULT result = S_OK) noexcept {
         std::ofstream file(folder / L"status.txt", std::ios::trunc);
         file << "LiteTaskbar 0.3.0 experimental\nstate=" << state
              << "\nhost_pid=" << GetCurrentProcessId() << "\nexplorer_pid=" << shellPid
-             << "\nbackground_elements=" << changed << "\nhresult=0x" << std::hex
+             << "\nbackground_elements=" << changed << "\nmaximized_rule=" << preferences.maximized
+             << "\nrequested_opacity=" << preferences.opacity << "\neffective_opacity=" << effectiveOpacity
+             << "\nhresult=0x" << std::hex
              << static_cast<unsigned long>(result) << '\n';
     } catch (...) {}
 }
@@ -208,12 +226,13 @@ LRESULT CALLBACK WindowProc(HWND wnd, UINT message, WPARAM wparam, LPARAM lparam
             else if (selected == 1) ShowSettings(host, preferences);
         }
         return 0;
-    case WM_DESTROY: CloseSettings(); if (foregroundHook) UnhookWinEvent(foregroundHook); if (locationHook) UnhookWinEvent(locationHook); Shell_NotifyIconW(NIM_DELETE, &icon); PostQuitMessage(0); return 0;
+    case WM_DESTROY: if (minimizeHook) UnhookWinEvent(minimizeHook); if (lifetimeHook) UnhookWinEvent(lifetimeHook); CloseSettings(); if (foregroundHook) UnhookWinEvent(foregroundHook); if (locationHook) UnhookWinEvent(locationHook); Shell_NotifyIconW(NIM_DELETE, &icon); PostQuitMessage(0); return 0;
     }
     return DefWindowProcW(wnd, message, wparam, lparam);
 }
 }
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR command, int) {
+    if (wcscmp(command, L"--test-window-rule") == 0) return TestForegroundRule();
     if (wcscmp(command, L"--self-test") == 0) {
         wchar_t testPath[32768]{};
         if (!GetModuleFileNameW(nullptr, testPath, 32768)) return 10;
@@ -281,3 +300,4 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR command, int) {
     CloseHandle(singleton);
     return 0;
 }
+
