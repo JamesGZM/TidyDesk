@@ -54,6 +54,8 @@ void ConfigureRule() {
 
 void Status(const char* state, HRESULT result = S_OK) noexcept {
     try {
+        std::ofstream trace(folder / L"events.txt", std::ios::app);
+        trace << GetTickCount64() << ' ' << state << ' ' << changed << " 0x" << std::hex << static_cast<unsigned long>(result) << '\n';
         std::ofstream file(folder / L"status.txt", std::ios::trunc);
         file << "LiteTaskbar 0.3.0 experimental\nstate=" << state
              << "\nhost_pid=" << GetCurrentProcessId() << "\nexplorer_pid=" << shellPid
@@ -141,7 +143,8 @@ LRESULT CALLBACK WindowProc(HWND wnd, UINT message, WPARAM wparam, LPARAM lparam
         return 0;
     case WM_CLOSE: Quit(); return 0;
     case WM_QUERYENDSESSION: SetEvent(stopEvent); return TRUE;
-    case MsgAttached: backend = reinterpret_cast<HWND>(wparam); UpdateOpacity(); attached = true; if (quitting) SetEvent(stopEvent); return 0;
+    case WM_APP + 15: Status("backend_stage", static_cast<HRESULT>(wparam)); return 0;
+    case MsgAttached: backend = reinterpret_cast<HWND>(wparam); Status("attached"); UpdateOpacity(); attached = true; if (quitting) SetEvent(stopEvent); return 0;
     case MsgChanged:
         changed = static_cast<unsigned>(wparam);
         if (changed) KillTimer(wnd, Deadline);

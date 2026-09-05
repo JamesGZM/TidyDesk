@@ -144,6 +144,7 @@ class Tap final : public RuntimeClass<RuntimeClassFlags<ClassicCom>, IObjectWith
         auto self = static_cast<Tap*>(context);
         const HRESULT initialized = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
         const HRESULT advised = self->tree->AdviseVisualTreeChange(self);
+        PostMessageW(self->host, WM_APP + 15, static_cast<WPARAM>(advised), 0);
         if (FAILED(advised)) self->ReportError(advised);
         else PostMessageW(self->host, MsgAttached, reinterpret_cast<WPARAM>(self->window), 0);
         if (SUCCEEDED(advised)) {
@@ -166,6 +167,7 @@ public:
     }
     HRESULT STDMETHODCALLTYPE SetSite(IUnknown* site) override {
         if (!site) {
+            if (host) PostMessageW(host, WM_APP + 15, 123, 0);
             if (stopEvent) SetEvent(stopEvent);
             return S_OK;
         }
