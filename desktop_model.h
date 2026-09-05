@@ -16,6 +16,7 @@ void Stop();
 void Notify();
 HRESULT Transfer(HWND owner, const std::vector<std::wstring>& paths, const std::wstring& destination, bool executableLinks=true);
 bool Dissolve(HWND owner, const std::wstring& id);
+HRESULT MoveOutAndRemove(HWND owner,const std::wstring& folder,const std::wstring& destination);
 int ModelTest();
 int TransferTest();
 }
