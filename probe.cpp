@@ -73,7 +73,7 @@ int wmain(int argc, wchar_t** argv) {
                      static_cast<unsigned long long>(memory.WorkingSetSize));
     }
     if (version.dwBuildNumber >= 22621) {
-        std::wprintf(L"backend_status=modern_xaml_backend_required_not_yet_implemented\n");
+        std::wprintf(L"backend_status=modern_xaml_candidate_requires_runtime_validation\n");
     } else {
         std::wprintf(L"backend_status=not_yet_implemented\n");
     }
