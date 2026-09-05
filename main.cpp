@@ -20,6 +20,7 @@ constexpr UINT AttachResult = WM_APP + 2;
 constexpr UINT Deadline = 1;
 constexpr UINT ShutdownDeadline = 2;
 constexpr UINT RestartDelay = 3;
+constexpr UINT RestoreDeadline = 5;
 HWND host = nullptr;
 HANDLE stopEvent = nullptr;
 std::filesystem::path folder;
@@ -36,6 +37,7 @@ Preferences preferences;
 HWND backend = nullptr;
 HWINEVENTHOOK foregroundHook = nullptr, locationHook = nullptr;
 HWINEVENTHOOK minimizeHook = nullptr, lifetimeHook = nullptr;
+HWINEVENTHOOK cloakHook = nullptr;
 bool ruleUpdatePending = false;
 unsigned effectiveOpacity = 0;
 HWND lastSentBackend = nullptr;
@@ -44,8 +46,13 @@ void UpdateOpacity() {
     effectiveOpacity = preferences.maximized && HasMaximizedWindow() ? 100U : preferences.opacity;
     if (backend && !backendFailed && (backend != lastSentBackend || effectiveOpacity != lastSentOpacity)) {
         if (PostMessageW(backend, MsgSetOpacity, effectiveOpacity, 0)) {
+            changed = 0;
+            SetTimer(host, Deadline, 10000, nullptr);
             lastSentBackend = backend;
             lastSentOpacity = effectiveOpacity;
+        } else {
+            backendFailed = true;
+            SettingsStatus(L"应用失败，请重试。");
         }
     }
 }
@@ -59,6 +66,8 @@ void ConfigureRule() {
     if (locationHook) UnhookWinEvent(locationHook);
     if (minimizeHook) UnhookWinEvent(minimizeHook);
     if (lifetimeHook) UnhookWinEvent(lifetimeHook);
+    if (cloakHook) UnhookWinEvent(cloakHook);
+    cloakHook = nullptr;
     minimizeHook = nullptr; lifetimeHook = nullptr;
     foregroundHook = nullptr; locationHook = nullptr;
     if (preferences.maximized) {
@@ -66,6 +75,7 @@ void ConfigureRule() {
         locationHook = SetWinEventHook(EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_LOCATIONCHANGE, nullptr, WindowEvent, 0, 0, WINEVENT_OUTOFCONTEXT);
         minimizeHook = SetWinEventHook(EVENT_SYSTEM_MINIMIZESTART, EVENT_SYSTEM_MINIMIZEEND, nullptr, WindowEvent, 0, 0, WINEVENT_OUTOFCONTEXT);
         lifetimeHook = SetWinEventHook(EVENT_OBJECT_DESTROY, EVENT_OBJECT_HIDE, nullptr, WindowEvent, 0, 0, WINEVENT_OUTOFCONTEXT);
+        cloakHook = SetWinEventHook(EVENT_OBJECT_CLOAKED, EVENT_OBJECT_UNCLOAKED, nullptr, WindowEvent, 0, 0, WINEVENT_OUTOFCONTEXT);
     }
     UpdateOpacity();
 }
@@ -151,7 +161,7 @@ void StartAttach() {
 }
 void RetryTaskbar() {
     SettingsStatus(L"正在应用…");
-    if (attached || backend) { retryAfterRestore = true; SetEvent(stopEvent); }
+    if (attached || backend) { retryAfterRestore = true; SetEvent(stopEvent); SetTimer(host, RestoreDeadline, 5000, nullptr); }
     else StartAttach();
 }
 void Quit() {
@@ -160,6 +170,7 @@ void Quit() {
     desk::Stop();
     KillTimer(host, Deadline);
     KillTimer(host, RestartDelay);
+    KillTimer(host, RestoreDeadline);
     SetEvent(stopEvent);
     Status("restoring");
     SetTimer(host, ShutdownDeadline, 5000, nullptr);
@@ -194,6 +205,7 @@ LRESULT CALLBACK WindowProc(HWND wnd, UINT message, WPARAM wparam, LPARAM lparam
         SettingsStatus(L"应用失败，请重试。");
         return 0;
     case MsgRestored:
+        KillTimer(wnd, RestoreDeadline);
         changed = 0;
         attached = false;
         backend = nullptr; lastSentBackend = nullptr; lastSentOpacity = 101;
@@ -208,11 +220,20 @@ LRESULT CALLBACK WindowProc(HWND wnd, UINT message, WPARAM wparam, LPARAM lparam
             SettingsStatus(L"应用失败，请重试。");
         }
         return 0;
-    case WM_TIMER:
+      case WM_TIMER:
+        if (wparam == RestoreDeadline) {
+            KillTimer(wnd, RestoreDeadline);
+            retryAfterRestore = false;
+            backendFailed = true;
+            SettingsStatus(L"应用失败，请重试。");
+            Status("restore_timeout");
+            return 0;
+        }
         if (wparam == 4) { KillTimer(wnd, 4); ruleUpdatePending = false; UpdateOpacity(); return 0; }
         if (wparam == Deadline) {
             KillTimer(wnd, Deadline);
             if (!changed) {
+                backendFailed = true;
                 Status("no_supported_background_found");
                 SetEvent(stopEvent);
                 SettingsStatus(L"应用失败：当前系统未能完成任务栏设置。");
@@ -240,7 +261,7 @@ LRESULT CALLBACK WindowProc(HWND wnd, UINT message, WPARAM wparam, LPARAM lparam
             else if (selected == 1) ShowSettings(host, preferences);
         }
         return 0;
-    case WM_DESTROY: if (minimizeHook) UnhookWinEvent(minimizeHook); if (lifetimeHook) UnhookWinEvent(lifetimeHook); CloseSettings(); if (foregroundHook) UnhookWinEvent(foregroundHook); if (locationHook) UnhookWinEvent(locationHook); Shell_NotifyIconW(NIM_DELETE, &icon); PostQuitMessage(0); return 0;
+    case WM_DESTROY: if (cloakHook) UnhookWinEvent(cloakHook); if (minimizeHook) UnhookWinEvent(minimizeHook); if (lifetimeHook) UnhookWinEvent(lifetimeHook); CloseSettings(); if (foregroundHook) UnhookWinEvent(foregroundHook); if (locationHook) UnhookWinEvent(locationHook); Shell_NotifyIconW(NIM_DELETE, &icon); PostQuitMessage(0); return 0;
     }
     return DefWindowProcW(wnd, message, wparam, lparam);
 }

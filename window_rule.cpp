@@ -92,7 +92,15 @@ int TestWindowRule() {
             SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
         DwmFlush();
         const bool manuallySized = HasMaximizedWindow(pid);
-        result = behindNormal && behindDialog && !allNormal && secondMax && !hidden && !manuallySized ? 0 : 2;
+        ShowWindow(tool, SW_SHOWMAXIMIZED);
+        const bool toolOnly = HasMaximizedWindow(pid);
+        ShowWindow(a, SW_RESTORE);
+        ShowWindow(a, SW_SHOWMAXIMIZED);
+        const bool restoredMax = HasMaximizedWindow(pid);
+        DestroyWindow(dialog); dialog = nullptr;
+        DestroyWindow(a); a = nullptr;
+        const bool closedLast = HasMaximizedWindow(pid);
+        result = behindNormal && behindDialog && !allNormal && secondMax && !hidden && !manuallySized && !toolOnly && restoredMax && !closedLast ? 0 : 2;
     }
     if (tool) DestroyWindow(tool);
     if (dialog) DestroyWindow(dialog);

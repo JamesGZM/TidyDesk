@@ -134,5 +134,6 @@ begin
     if RegQueryStringValue(HKCU, RunKey, 'TidyDesk', Command) then
       if Pos(Lowercase(ExpandConstant('{app}')), Lowercase(Command)) > 0 then RegDeleteValue(HKCU, RunKey, 'TidyDesk');
   end;
-  if CurUninstallStep = usPostUninstall then DeleteFile(ExpandConstant('{app}\blank.ico'));
+  // Explorer may still cache this overlay after restoration. Keep the tiny
+  // resource so uninstall does not turn cached shortcuts into black squares.
 end;
