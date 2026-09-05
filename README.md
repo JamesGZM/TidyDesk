@@ -1,49 +1,36 @@
-# LiteTaskbar
+# TidyDesk · 整洁桌面
 
-原生 C++ 的 Windows 11 任务栏透明工具，MIT 开源，无浏览器运行时、无遥测、无运行时网络请求。
+JamesGZM 的轻量 Windows 桌面美化与整理工具，原名 LiteTaskbar。原生 C++、MIT 开源、无浏览器运行时、无遥测。本项目与其他同名 TidyDesk 软件无关。
 
-## 安装版（0.3.1 实验版）
+## 0.4.0 实验版
 
-云端构建现在同时生成 `LiteTaskbar-0.3.1-Setup.exe`。安装时可选择桌面快捷方式与登录自启，默认放到当前用户的 `AppData\Local\Programs\LiteTaskbar`；以后从桌面或开始菜单启动，无需打开 Codex。Windows“已安装的应用”中提供卸载入口。限制见 `INSTALL-NOTES.txt`。
+- 五页原生设置：概览、任务栏、桌面收纳、图标、常规，系统深浅色、高 DPI、自动保存。
+- 任务栏背景透明度及“桌面存在最大化窗口”规则；普通前台窗口不会抵消后面的最大化窗口。
+- 独立桌面收纳进程：分类文件夹、拖入拖出、排序、折叠、锁定、缩放、图标大小与背景浓度。
+- 文件实际移动；拖入 `.exe` 创建快捷方式，不移动安装文件。重名、取消和失败使用 Windows Shell 文件操作处理。
+- 隐藏系统快捷方式箭头：按需提权，备份并恢复原注册表值，刷新需用户主动操作。
 
-安装程序使用版本子目录，避免升级时覆盖仍被 Explorer 占用的后端 DLL。云端自动测试安装、快捷方式、卸载注册与清理。关闭 Codex 后的实际运行情况仍需独立验证，安装本身不代表这项测试已经通过。
+首次打开“桌面收纳”，新建分类文件夹或绑定已有文件夹。创建文件夹可用系统选择窗口中的“新建文件夹”。右键框标题调整样式；右键项目可移回桌面。移除框只删除布局。
 
-## 便携版使用
+## 安装与迁移
 
-从 [Releases](https://github.com/JamesGZM/LiteTaskbar/releases) 下载实验版 ZIP，解压全部文件到固定目录，双击 `LiteTaskbar.exe`。需要 Windows 11 现代 XAML 任务栏和 x64 系统；不需要管理员权限。
+在 [Actions](https://github.com/JamesGZM/TidyDesk/actions) 成功构建的 Artifacts 下载安装包。实验构建不等于稳定发行版。
 
-0.3.0 新增独立应用和托盘图标，以及原生设置窗口：
+安装器沿用 LiteTaskbar 的 AppId；旧安装保留原目录，新安装默认 `%LOCALAPPDATA%\Programs\TidyDesk`。启动前须退出旧版托盘进程，安装器不会强行重启 Explorer。版本子目录避免覆盖已加载的 DLL。旧偏好保留在 `HKCU\Software\LiteTaskbar`，首次启动迁入 `HKCU\Software\TidyDesk`。自启项为带引号的程序路径加 `--background`，升级保留选择。
 
-- 背景不透明度 0–100%；0% 全透明，100% 恢复系统背景属性。
-- 可选“桌面存在最大化窗口时使用系统默认背景”。最大化浏览器即使被普通窗口盖住仍触发；最小化、隐藏或位于其他虚拟桌面的窗口不触发。
-- 可选“登录 Windows 时自动启动”，初始关闭。
-- 点击“应用”保存；关闭设置窗口后继续在托盘运行。
-- 点击托盘图标，或再次双击程序，重新打开设置。Windows 可能将图标收进右下角 ∧ 隐藏区。
-- 选择“退出并恢复”，或双击 `LiteTaskbarStop.exe`，退出并恢复原来的背景。
+分类文件默认位于用户文档的 `TidyDesk Collections`，布局在 `%LOCALAPPDATA%\TidyDesk\layout.ini`，带原子替换和 `layout.bak` 备份。退出、卸载均不删除分类文件和配置。关闭设置继续托盘运行；从托盘退出恢复任务栏并关闭收纳进程。
 
-自启使用当前用户 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` 中的 `LiteTaskbar` 项，命令为带引号的完整程序路径和 `--background`。下次登录静默启动，取消勾选并应用可移除。开启后不要移动程序目录；移动后重新应用自启设置。Windows 任务管理器中禁用启动项也会影响自启。
+图标覆盖影响系统快捷方式，可能需要注销后重新登录。不要删除 `blank.ico`；卸载时先恢复覆盖设置。若其他程序已修改覆盖项，恢复会停止并保留备份。未自动重启 Explorer。
 
-偏好保存在 `HKCU\Software\LiteTaskbar`。卸载前取消自启并退出，再删除解压目录；此偏好键可手动删除。
+## 架构和边界
 
-## 资源占用与实现
+`TidyDesk.exe` 管理托盘、设置和任务栏规则；`TidyDeskDesktop.exe` 仅在启用收纳时运行，使用原生 ListView、OLE 拖拽、目录通知和异步图标加载，图标缓存上限 512/框。桌面模块不注入 Explorer。任务栏仍使用独立连接器和 XAML 后端。
 
-设置页使用按需创建的 Win32 控件，关闭后销毁窗口和字体。主程序不加载 XAML 运行时；`LiteTaskbarAttach.exe` 仅在连接时短暂运行。无定时轮询；最大化规则在系统窗口事件触发后合并检查一次，不进行空闲轮询；外观未变化时不重复写入。
+桌面层依赖 Windows Shell 窗口结构，需在具体 Windows 版本验证。任务栏 XAML 重连仍有兼容性风险；失败显示在设置页，不重复弹窗。性能目标（新增桌面进程空闲平均 CPU ≤0.1%、私有内存 ≤50 MiB）尚需实测，不能以主进程内存替代总开销。详见 [VALIDATION.md](VALIDATION.md)。
 
-后端通过 Windows XAML 诊断接口进入 Explorer，仅修改精确匹配 `Taskbar.TaskbarBackground` 的元素，保留图标和交互。透明度变化在 XAML UI 线程执行，100% 和退出时恢复保存的局部属性。DLL 映射保留到 Explorer 结束以避免回调执行时卸载，因此主进程内存不等于总开销。
+## 开发与开源参考
 
-0.2.1 的历史短时测试主进程工作集约 9 MiB；这不是 0.3.0 或所有设备的承诺。最新验证范围见 [VALIDATION.md](VALIDATION.md)。未与 TranslucentTB 做严格同条件对照。
-
-## 实验版限制
-
-Windows 任务栏内部结构可能变化。多显示器、睡眠唤醒、Explorer 重启和长时间运行仍需更多验证。不要同时运行多个任务栏美化工具。本版没有实现模糊、亚克力或按应用匹配等高级规则。
-
-程序目录内 `status.txt` 的 `custom_background` 表示后台已处理背景元素；`system_default` 表示使用系统背景；`restored` 表示退出恢复完成。状态不能替代肉眼确认。若显示 `exit_restore_not_confirmed`，请检查桌面。连接失败后停止，不持续重试。
-
-## 云端构建
-
-GitHub Actions → Windows build 自动在云端编译，用户无需开发环境。成功运行的 Artifacts 包含程序、后端、连接器、退出工具和 SHA-256 校验表。
-
-开发者本地需要 Visual Studio 2022 C++ 和 Windows SDK：
+GitHub Actions 使用 Windows 2022、MSVC C++17、Windows SDK 和 Inno Setup 6，编译、测试并生成安装包。用户不需要开发环境。
 
 ```powershell
 cmake -S . -B build -A x64
@@ -51,10 +38,6 @@ cmake --build build --config Release
 ctest --test-dir build -C Release --output-on-failure
 ```
 
-CI 验证编译、命令行和 DLL COM 初始化，不验证真实桌面效果。`LiteTaskbarProbe.exe` 是只读诊断工具。程序尚未签名。
+交互参考 [Desktop Frames+](https://github.com/limbo666/DesktopFramesPlus) 和 [NoFences](https://github.com/Twometer/NoFences)，本版桌面模块独立实现，未复制第三方源码。历史 LiteTaskbar 提交及标签保留。
 
-项目独立实现，参考 TranslucentTB 的功能方向，不复制其 GPL 源码。
-
-## License
-
-[MIT](LICENSE) © 2026 JamesGZM
+MIT © 2026 JamesGZM

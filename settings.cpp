@@ -1,147 +1,74 @@
 // SPDX-License-Identifier: MIT
 #include "settings.h"
+#include "desktop_model.h"
 #include <commctrl.h>
+#include <dwmapi.h>
+#include <uxtheme.h>
+#include <shellapi.h>
+#include <shlobj.h>
 #include <string>
-#include <cwchar>
-
+#include <vector>
+#include <algorithm>
 namespace {
-constexpr wchar_t Key[] = L"Software\\LiteTaskbar";
-constexpr wchar_t Run[] = L"Software\\Microsoft\\Windows\\CurrentVersion\\Run";
-HWND page = nullptr, ownerWindow = nullptr;
-HFONT font = nullptr, titleFont = nullptr;
-Preferences draft;
-int Scale(int n) { return MulDiv(n, static_cast<int>(GetDpiForWindow(page)), 96); }
-HWND Control(const wchar_t* cls, const wchar_t* text, DWORD style, int id, int x, int y, int w, int h) {
-    HWND c = CreateWindowExW(0, cls, text, WS_CHILD | WS_VISIBLE | style,
-        Scale(x), Scale(y), Scale(w), Scale(h), page,
-        reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), GetModuleHandleW(nullptr), nullptr);
-    SendMessageW(c, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
-    return c;
+constexpr wchar_t Key[]=L"Software\\TidyDesk",OldKey[]=L"Software\\LiteTaskbar",Run[]=L"Software\\Microsoft\\Windows\\CurrentVersion\\Run";
+HWND page=nullptr,ownerWindow=nullptr;HFONT font=nullptr,titleFont=nullptr;HBRUSH bg=nullptr;
+Preferences draft;int active=0,selected=-1;bool building=false,dark=false;std::wstring backendStatus=L"等待任务栏状态";std::vector<desk::Box> boxes;
+struct Position{HWND w;int x,y,width,height;bool stretch;};std::vector<Position> positions;
+COLORREF Background(){return dark?RGB(22,27,32):RGB(245,247,250);}COLORREF Text(){return dark?RGB(235,241,245):RGB(26,37,45);}
+int Scale(int n){return MulDiv(n,static_cast<int>(GetDpiForWindow(page)),96);}
+DWORD Get(const wchar_t* name,DWORD fallback){DWORD v=0,b=sizeof(v);return RegGetValueW(HKEY_CURRENT_USER,Key,name,RRF_RT_REG_DWORD,nullptr,&v,&b)==ERROR_SUCCESS?v:fallback;}
+LSTATUS Put(const wchar_t* name,DWORD value){HKEY k=nullptr;auto e=RegCreateKeyExW(HKEY_CURRENT_USER,Key,0,nullptr,0,KEY_SET_VALUE,nullptr,&k,nullptr);if(!e){e=RegSetValueExW(k,name,0,REG_DWORD,reinterpret_cast<BYTE*>(&value),sizeof(value));RegCloseKey(k);}return e;}
+bool OwnedOld(const std::wstring& value){auto pos=value.find(L'"',1);if(value.empty()||value.front()!=L'"'||pos==std::wstring::npos)return false;auto p=std::filesystem::path(value.substr(1,pos-1));return _wcsicmp(p.filename().c_str(),L"LiteTaskbar.exe")==0;}
+std::wstring RunValue(const wchar_t* name){wchar_t b[32768]{};DWORD size=sizeof(b);if(RegGetValueW(HKEY_CURRENT_USER,Run,name,RRF_RT_REG_SZ,nullptr,b,&size)!=ERROR_SUCCESS)return {};return b;}
+bool StartupEnabled(){return !RunValue(L"TidyDesk").empty();}
+LSTATUS Startup(bool enabled){HKEY k=nullptr;auto e=RegCreateKeyExW(HKEY_CURRENT_USER,Run,0,nullptr,0,KEY_SET_VALUE,nullptr,&k,nullptr);if(e)return e;
+ if(enabled){wchar_t path[32768]{};auto n=GetModuleFileNameW(nullptr,path,32768);if(!n||n>=32768){RegCloseKey(k);return ERROR_BAD_PATHNAME;}std::wstring cmd=L"\""+std::wstring(path)+L"\" --background";if(cmd.size()>=260){RegCloseKey(k);return ERROR_FILENAME_EXCED_RANGE;}e=RegSetValueExW(k,L"TidyDesk",0,REG_SZ,reinterpret_cast<const BYTE*>(cmd.c_str()),static_cast<DWORD>((cmd.size()+1)*2));}
+ else{e=RegDeleteValueW(k,L"TidyDesk");if(e==ERROR_FILE_NOT_FOUND)e=ERROR_SUCCESS;}
+ if(!e&&OwnedOld(RunValue(L"LiteTaskbar")))RegDeleteValueW(k,L"LiteTaskbar");RegCloseKey(k);return e;}
+void Theme(){DWORD light=1,b=sizeof(light);RegGetValueW(HKEY_CURRENT_USER,L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",L"AppsUseLightTheme",RRF_RT_REG_DWORD,nullptr,&light,&b);dark=draft.theme==2||(draft.theme==0&&!light);if(bg)DeleteObject(bg);bg=CreateSolidBrush(Background());BOOL enabled=dark;DwmSetWindowAttribute(page,20,&enabled,sizeof(enabled));}
+HWND Control(const wchar_t* cls,const wchar_t* text,DWORD style,int id,int x,int y,int width,int height,bool stretch=false){auto w=CreateWindowExW(0,cls,text,WS_CHILD|WS_VISIBLE|style,Scale(x),Scale(y),Scale(width),Scale(height),page,reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)),GetModuleHandleW(nullptr),nullptr);SendMessageW(w,WM_SETFONT,reinterpret_cast<WPARAM>(font),TRUE);SetWindowTheme(w,dark?L"DarkMode_Explorer":L"Explorer",nullptr);positions.push_back({w,x,y,width,height,stretch});return w;}
+void Label(const wchar_t* text,int y,int height=30){Control(L"STATIC",text,0,0,250,y,650,height,true);}
+HWND Button(const wchar_t* text,int id,int x,int y,int width=160){return Control(L"BUTTON",text,BS_PUSHBUTTON|WS_TABSTOP,id,x,y,width,36);}
+void Layout(){RECT r{};GetClientRect(page,&r);int extra=MulDiv(r.right,96,static_cast<int>(GetDpiForWindow(page)))-960;for(auto& p:positions)MoveWindow(p.w,Scale(p.x),Scale(p.y),Scale((std::max)(40,p.width+(p.stretch?extra:0))),Scale(p.height),TRUE);InvalidateRect(page,nullptr,TRUE);}
+void Status(const wchar_t* text){if(page)SetDlgItemTextW(page,90,text);}
+void Apply(){auto e=Put(L"Opacity",draft.opacity);if(!e)e=Put(L"Maximized",draft.maximized);if(!e)e=Put(L"Desktop",draft.desktop);if(!e)e=Put(L"Theme",draft.theme);if(e){Status(L"保存失败，请检查配置权限。");return;}
+ SendMessageW(ownerWindow,SettingsApply,draft.opacity,draft.maximized);if(draft.desktop)desk::Start(page);else desk::Stop();Status(L"设置已保存");}
+std::wstring ArrowStatus(){wchar_t value[32768]{};DWORD size=sizeof(value);auto e=RegGetValueW(HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Icons",L"29",RRF_RT_REG_SZ|RRF_SUBKEY_WOW6464KEY,nullptr,value,&size);if(e==ERROR_FILE_NOT_FOUND)return L"系统默认箭头";if(e)return L"无法读取系统图标状态";return L"存在自定义覆盖设置；实际图标效果请在桌面确认";}
+void Build(){building=true;for(auto& p:positions)DestroyWindow(p.w);positions.clear();if(font)DeleteObject(font);if(titleFont)DeleteObject(titleFont);Theme();font=CreateFontW(-Scale(14),0,0,0,FW_NORMAL,FALSE,FALSE,FALSE,DEFAULT_CHARSET,OUT_DEFAULT_PRECIS,CLIP_DEFAULT_PRECIS,CLEARTYPE_QUALITY,DEFAULT_PITCH,L"Segoe UI");titleFont=CreateFontW(-Scale(28),0,0,0,FW_SEMIBOLD,FALSE,FALSE,FALSE,DEFAULT_CHARSET,OUT_DEFAULT_PRECIS,CLIP_DEFAULT_PRECIS,CLEARTYPE_QUALITY,DEFAULT_PITCH,L"Segoe UI");
+ auto logo=Control(L"STATIC",L"",SS_ICON,0,24,26,36,36);SendMessageW(logo,STM_SETICON,reinterpret_cast<WPARAM>(LoadIconW(GetModuleHandleW(nullptr),MAKEINTRESOURCEW(101))),0);
+ Control(L"STATIC",L"TidyDesk",0,0,72,30,135,28);Control(L"STATIC",L"整洁桌面",0,0,24,78,180,25);
+ const wchar_t* names[]={L"概览",L"任务栏",L"桌面收纳",L"图标",L"常规"};for(int i=0;i<5;++i){auto w=Button(names[i],100+i,20,135+i*52,188);if(i==active)SendMessageW(w,BM_SETSTYLE,BS_DEFPUSHBUTTON,TRUE);}
+ Control(L"STATIC",L"0.4.0 实验版\nMIT · JamesGZM",0,0,24,535,180,50);
+ auto title=Control(L"STATIC",names[active],0,0,250,30,640,42,true);SendMessageW(title,WM_SETFONT,reinterpret_cast<WPARAM>(titleFont),TRUE);
+ if(active==0){Label(L"让桌面清爽，也让常用内容触手可及。",85);Label(L"任务栏",140);Label(backendStatus.c_str(),178,52);Button(L"任务栏设置",101,250,240);Label(L"桌面收纳",308);auto text=std::wstring(draft.desktop?L"已启用":L"未启用")+L" · "+std::to_wstring(desk::Load().size())+L" 个分类框";Label(text.c_str(),348);Button(L"新建收纳框",210,250,394);Button(L"管理收纳框",102,426,394);Label(L"关闭此窗口后，TidyDesk 继续在托盘运行。",490);}
+ if(active==1){Label(L"只调整背景，保留任务栏图标与点击操作。",85);Label(L"背景预览",140);Control(L"STATIC",L"",SS_OWNERDRAW,60,250,182,640,64,true);std::wstring value=L"背景不透明度："+std::to_wstring(draft.opacity)+L"%";Control(L"STATIC",value.c_str(),0,61,250,270,640,30,true);auto slider=Control(TRACKBAR_CLASSW,L"背景不透明度",TBS_AUTOTICKS|WS_TABSTOP,12,246,310,645,40,true);SendMessageW(slider,TBM_SETRANGE,TRUE,MAKELPARAM(0,100));SendMessageW(slider,TBM_SETPOS,TRUE,draft.opacity);
+ auto rule=Control(L"BUTTON",L"桌面存在最大化窗口时，使用系统背景",BS_AUTOCHECKBOX|WS_TABSTOP,13,250,375,650,30,true);SendMessageW(rule,BM_SETCHECK,draft.maximized?BST_CHECKED:BST_UNCHECKED,0);Label(L"包括被普通窗口遮住的最大化窗口；最小化窗口不触发。",419,48);Label(backendStatus.c_str(),478,52);Button(L"重新连接",220,250,542);}
+ if(active==2){auto enable=Control(L"BUTTON",L"启用桌面收纳",BS_AUTOCHECKBOX|WS_TABSTOP,200,250,90,260,32);SendMessageW(enable,BM_SETCHECK,draft.desktop?BST_CHECKED:BST_UNCHECKED,0);Button(L"新建分类文件夹",210,250,140,185);Button(L"绑定已有文件夹",211,450,140,185);
+ boxes=desk::Load();auto list=Control(L"LISTBOX",L"收纳框",LBS_NOTIFY|WS_BORDER|WS_VSCROLL|WS_TABSTOP,201,250,198,280,250);for(auto& box:boxes){auto text=box.name+(box.collapsed?L" · 已折叠":L"");SendMessageW(list,LB_ADDSTRING,0,reinterpret_cast<LPARAM>(text.c_str()));}if(!boxes.empty()){selected=std::clamp(selected,0,static_cast<int>(boxes.size())-1);SendMessageW(list,LB_SETCURSEL,selected,0);auto& b=boxes[static_cast<size_t>(selected)];Control(L"STATIC",L"收纳框名称",0,0,552,198,330,24);Control(L"EDIT",b.name.c_str(),WS_BORDER|WS_TABSTOP|ES_AUTOHSCROLL,202,552,230,330,32,true);Control(L"STATIC",b.path.c_str(),0,0,552,277,330,70,true);Button(L"打开文件夹",212,552,358);Button(b.collapsed?L"展开":L"折叠",213,730,358,150);Button(b.locked?L"解锁位置":L"锁定位置",214,552,410);Button(L"移除框",215,730,410,150);Button(L"保存名称",216,552,464);}
+ else Label(L"还没有收纳框。新建分类文件夹，开始整理桌面。",470,48);Label(L"拖入文件会实际移动；程序 .exe 会创建快捷方式。\n右键收纳框可调整图标大小、背景浓度；移除框会保留文件。",535,60);}
+ if(active==3){Label(L"快捷方式箭头",100);Label(L"隐藏普通桌面快捷方式左下角的箭头。\n此设置也可能影响文件资源管理器，需要管理员权限。",145,60);Label(ArrowStatus().c_str(),235,55);Button(L"隐藏箭头…",230,250,330);Button(L"恢复原设置…",231,426,330);Button(L"刷新图标",232,602,330);Label(L"修改前自动备份原值。刷新后若尚未变化，请在方便时\n注销并重新登录。程序不会自动重启资源管理器。",410,72);}
+ if(active==4){auto startup=Control(L"BUTTON",L"登录 Windows 时自动启动",BS_AUTOCHECKBOX|WS_TABSTOP,14,250,110,640,32,true);SendMessageW(startup,BM_SETCHECK,StartupEnabled()?BST_CHECKED:BST_UNCHECKED,0);Label(L"界面主题",182);auto combo=Control(L"COMBOBOX",L"主题",CBS_DROPDOWNLIST|WS_TABSTOP,240,250,223,260,180);for(auto text:{L"跟随系统",L"浅色",L"深色"})SendMessageW(combo,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(text));SendMessageW(combo,CB_SETCURSEL,draft.theme,0);Button(L"打开配置目录",241,250,300);Button(L"打开分类目录",242,426,300);Button(L"恢复外观默认值",243,250,365,200);Button(L"开源仓库",244,466,365);Label(L"TidyDesk · 整洁桌面 0.4.0 实验版\n原名 LiteTaskbar · MIT © JamesGZM\n本项目与其他同名 TidyDesk 软件无关。",450,90);}
+ Control(L"STATIC",L"",0,90,250,610,650,32,true);Layout();building=false;}
+void Arrow(bool restore){wchar_t exe[32768]{};GetModuleFileNameW(nullptr,exe,32768);auto path=std::filesystem::path(exe).parent_path()/L"TidyDeskIcons.exe";SHELLEXECUTEINFOW info{sizeof(info)};info.hwnd=page;info.lpVerb=L"runas";info.lpFile=path.c_str();info.lpParameters=restore?L"--restore":L"--hide";info.nShow=SW_SHOWNORMAL;if(!ShellExecuteExW(&info))Status(L"操作未启动或已取消；系统设置未由此操作更改。");else Status(L"已请求系统修改；请查看操作结果，随后刷新图标。");}
+LRESULT CALLBACK Proc(HWND wnd,UINT msg,WPARAM wp,LPARAM lp){switch(msg){case WM_CREATE:page=wnd;Build();return 0;case WM_SIZE:Layout();return 0;
+ case WM_GETMINMAXINFO:{auto i=reinterpret_cast<MINMAXINFO*>(lp);auto dpi=GetDpiForSystem();i->ptMinTrackSize={MulDiv(940,static_cast<int>(dpi),96),MulDiv(700,static_cast<int>(dpi),96)};return 0;}
+ case WM_CTLCOLORSTATIC:case WM_CTLCOLORBTN:case WM_CTLCOLOREDIT:case WM_CTLCOLORLISTBOX:{auto dc=reinterpret_cast<HDC>(wp);SetTextColor(dc,Text());SetBkColor(dc,Background());return reinterpret_cast<LRESULT>(bg);}
+ case WM_ERASEBKGND:{RECT r{};GetClientRect(wnd,&r);if(bg)FillRect(reinterpret_cast<HDC>(wp),&r,bg);return 1;}
+ case WM_DRAWITEM:{auto d=reinterpret_cast<DRAWITEMSTRUCT*>(lp);if(d->CtlID==60){auto brush=CreateSolidBrush(RGB(64,137,145));FillRect(d->hDC,&d->rcItem,brush);DeleteObject(brush);RECT r=d->rcItem;r.top+=20;const auto shade=static_cast<BYTE>(40+draft.opacity*2);brush=CreateSolidBrush(RGB(shade,shade,shade));FillRect(d->hDC,&r,brush);DeleteObject(brush);SetTextColor(d->hDC,RGB(255,255,255));SetBkMode(d->hDC,TRANSPARENT);DrawTextW(d->hDC,L"任务栏背景预览",-1,&r,DT_CENTER|DT_VCENTER|DT_SINGLELINE);return TRUE;}break;}
+ case WM_HSCROLL:if(!building){draft.opacity=static_cast<unsigned>(SendDlgItemMessageW(wnd,12,TBM_GETPOS,0,0));auto text=L"背景不透明度："+std::to_wstring(draft.opacity)+L"%";SetDlgItemTextW(wnd,61,text.c_str());InvalidateRect(GetDlgItem(wnd,60),nullptr,TRUE);SetTimer(wnd,1,160,nullptr);}return 0;
+ case WM_TIMER:KillTimer(wnd,1);Apply();return 0;
+ case WM_COMMAND:{if(building)return 0;int id=LOWORD(wp),event=HIWORD(wp);if(id>=100&&id<=104){active=id-100;Build();return 0;}if(id==13){draft.maximized=IsDlgButtonChecked(wnd,13)==BST_CHECKED;Apply();}else if(id==14){auto e=Startup(IsDlgButtonChecked(wnd,14)==BST_CHECKED);Status(e?L"自启设置未保存。":L"自启设置已保存。");CheckDlgButton(wnd,14,StartupEnabled()?BST_CHECKED:BST_UNCHECKED);}else if(id==200){draft.desktop=IsDlgButtonChecked(wnd,200)==BST_CHECKED;Apply();}
+ else if(id==210||id==211){if(desk::NewBox(wnd,id==211)){draft.desktop=true;Apply();active=2;Build();}}
+ else if(id==201&&event==LBN_SELCHANGE){selected=static_cast<int>(SendDlgItemMessageW(wnd,201,LB_GETCURSEL,0,0));Build();}
+ else if(id>=212&&id<=216&&selected>=0&&static_cast<size_t>(selected)<boxes.size()){auto& b=boxes[static_cast<size_t>(selected)];if(id==212)ShellExecuteW(wnd,L"open",b.path.c_str(),nullptr,nullptr,SW_SHOWNORMAL);else{if(id==213)b.collapsed=!b.collapsed;if(id==214)b.locked=!b.locked;if(id==215)boxes.erase(boxes.begin()+selected);if(id==216){wchar_t text[128]{};GetDlgItemTextW(wnd,202,text,128);if(!*text){Status(L"请输入名称。");return 0;}b.name=text;}if(desk::Save(boxes)){desk::Notify();Build();Status(L"收纳框设置已保存。");}else Status(L"布局保存失败。");}}
+ else if(id==220)SendMessageW(ownerWindow,SettingsRetry,0,0);else if(id==230||id==231)Arrow(id==231);else if(id==232){SHChangeNotify(SHCNE_ASSOCCHANGED,SHCNF_IDLIST,nullptr,nullptr);Build();Status(L"已请求刷新；若尚未生效，请注销后重新登录。");}
+ else if(id==240&&event==CBN_SELCHANGE){draft.theme=static_cast<unsigned>(SendDlgItemMessageW(wnd,240,CB_GETCURSEL,0,0));Apply();Build();}else if(id==241||id==242){auto path=id==241?desk::DataDir():desk::CollectionsDir();std::error_code ec;std::filesystem::create_directories(path,ec);ShellExecuteW(wnd,L"open",path.c_str(),nullptr,nullptr,SW_SHOWNORMAL);}else if(id==243){draft.opacity=0;draft.maximized=false;draft.theme=0;Apply();Build();}else if(id==244)ShellExecuteW(wnd,L"open",L"https://github.com/JamesGZM/TidyDesk",nullptr,nullptr,SW_SHOWNORMAL);return 0;}
+ case WM_SETTINGCHANGE:if(draft.theme==0)Build();return 0;case WM_DPICHANGED:{auto r=reinterpret_cast<RECT*>(lp);SetWindowPos(wnd,nullptr,r->left,r->top,r->right-r->left,r->bottom-r->top,SWP_NOZORDER|SWP_NOACTIVATE);Build();return 0;}
+ case WM_CLOSE:KillTimer(wnd,1);Apply();DestroyWindow(wnd);return 0;case WM_DESTROY:DeleteObject(font);DeleteObject(titleFont);DeleteObject(bg);font=nullptr;titleFont=nullptr;bg=nullptr;positions.clear();page=nullptr;return 0;}return DefWindowProcW(wnd,msg,wp,lp);}
 }
-bool StartupEnabled() {
-    wchar_t text[32768]{}; DWORD bytes = sizeof(text);
-    return RegGetValueW(HKEY_CURRENT_USER, Run, L"LiteTaskbar", RRF_RT_REG_SZ, nullptr, text, &bytes) == ERROR_SUCCESS && *text;
-}
-LSTATUS Save(bool startup) {
-    HKEY key = nullptr;
-    LSTATUS result = RegCreateKeyExW(HKEY_CURRENT_USER, Run, 0, nullptr, 0, KEY_SET_VALUE, nullptr, &key, nullptr);
-    if (result != ERROR_SUCCESS) return result;
-    if (startup) {
-        wchar_t path[32768]{};
-        const DWORD count = GetModuleFileNameW(nullptr, path, 32768);
-        if (!count || count >= 32768) { RegCloseKey(key); return ERROR_BAD_PATHNAME; }
-        std::wstring command = L"\"" + std::wstring(path) + L"\" --background";
-        // Run entries have a documented maximum command length of 260 characters.
-        if (command.size() >= 260) { RegCloseKey(key); return ERROR_FILENAME_EXCED_RANGE; }
-        result = RegSetValueExW(key, L"LiteTaskbar", 0, REG_SZ,
-            reinterpret_cast<const BYTE*>(command.c_str()), static_cast<DWORD>((command.size() + 1) * sizeof(wchar_t)));
-    } else {
-        result = RegDeleteValueW(key, L"LiteTaskbar");
-        if (result == ERROR_FILE_NOT_FOUND) result = ERROR_SUCCESS;
-    }
-    RegCloseKey(key);
-    if (result != ERROR_SUCCESS) return result;
-    result = RegCreateKeyExW(HKEY_CURRENT_USER, Key, 0, nullptr, 0, KEY_SET_VALUE, nullptr, &key, nullptr);
-    if (result != ERROR_SUCCESS) return result;
-    DWORD opacity = draft.opacity, maximized = draft.maximized ? 1U : 0U;
-    result = RegSetValueExW(key, L"Opacity", 0, REG_DWORD, reinterpret_cast<const BYTE*>(&opacity), sizeof(opacity));
-    if (result == ERROR_SUCCESS) result = RegSetValueExW(key, L"Maximized", 0, REG_DWORD, reinterpret_cast<const BYTE*>(&maximized), sizeof(maximized));
-    RegCloseKey(key);
-    return result;
-}
-void Label() {
-    wchar_t text[128]{};
-    swprintf_s(text, L"背景不透明度：%u%%   （0%% 全透明 / 100%% 系统默认）", draft.opacity);
-    SetDlgItemTextW(page, 11, text);
-}
-void Build() {
-    font = CreateFontW(-Scale(14), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
-                      OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
-    titleFont = CreateFontW(-Scale(25), 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
-                      OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
-    auto logo = Control(L"STATIC", L"", SS_ICON, 1, 28, 25, 40, 40);
-    SendMessageW(logo, STM_SETICON, reinterpret_cast<WPARAM>(LoadIconW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(101))), 0);
-    auto title = Control(L"STATIC", L"LiteTaskbar", 0, 2, 80, 20, 380, 38);
-    SendMessageW(title, WM_SETFONT, reinterpret_cast<WPARAM>(titleFont), TRUE);
-    Control(L"STATIC", L"轻量任务栏 · 0.3.1 实验版", 0, 3, 80, 62, 430, 25);
-    Control(L"STATIC", L"任务栏外观", 0, 4, 28, 110, 490, 26);
-    Control(L"STATIC", L"", 0, 11, 28, 148, 505, 28);
-    auto slider = Control(TRACKBAR_CLASSW, L"背景不透明度", TBS_AUTOTICKS | WS_TABSTOP, 12, 24, 182, 510, 42);
-    SendMessageW(slider, TBM_SETRANGE, TRUE, MAKELPARAM(0, 100));
-    SendMessageW(slider, TBM_SETTICFREQ, 25, 0);
-    SendMessageW(slider, TBM_SETPOS, TRUE, draft.opacity);
-    auto rule = Control(L"BUTTON", L"桌面存在最大化窗口时，使用系统默认背景", BS_AUTOCHECKBOX | WS_TABSTOP, 13, 28, 244, 500, 28);
-    SendMessageW(rule, BM_SETCHECK, draft.maximized ? BST_CHECKED : BST_UNCHECKED, 0);
-    Control(L"STATIC", L"启动与托盘", 0, 5, 28, 298, 490, 26);
-    auto startup = Control(L"BUTTON", L"登录 Windows 时自动启动", BS_AUTOCHECKBOX | WS_TABSTOP, 14, 28, 336, 495, 28);
-    SendMessageW(startup, BM_SETCHECK, StartupEnabled() ? BST_CHECKED : BST_UNCHECKED, 0);
-    Control(L"STATIC", L"关闭设置后继续在托盘运行。图标可能在右下角 ∧ 中。\n再次双击程序或点击托盘图标，即可打开设置。", 0, 6, 28, 383, 505, 48);
-    Control(L"STATIC", L"", 0, 15, 28, 445, 500, 26);
-    Control(L"BUTTON", L"退出并恢复", WS_TABSTOP, 22, 28, 487, 128, 36);
-    Control(L"BUTTON", L"关闭", WS_TABSTOP, 21, 302, 487, 100, 36);
-    Control(L"BUTTON", L"应用", BS_DEFPUSHBUTTON | WS_TABSTOP, 20, 418, 487, 110, 36);
-    Label();
-}
-LRESULT CALLBACK Proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
-    switch (msg) {
-    case WM_CTLCOLORSTATIC:
-    case WM_CTLCOLORBTN:
-        SetBkMode(reinterpret_cast<HDC>(wp), TRANSPARENT);
-        return reinterpret_cast<LRESULT>(GetSysColorBrush(COLOR_WINDOW));
-    case WM_CREATE: page = wnd; Build(); return 0;
-    case WM_HSCROLL: draft.opacity = static_cast<unsigned>(SendDlgItemMessageW(wnd, 12, TBM_GETPOS, 0, 0)); Label(); SetDlgItemTextW(wnd, 15, L"点击“应用”保存更改"); return 0;
-    case WM_COMMAND:
-        if (LOWORD(wp) == 20) {
-            draft.maximized = IsDlgButtonChecked(wnd, 13) == BST_CHECKED;
-            const auto result = Save(IsDlgButtonChecked(wnd, 14) == BST_CHECKED);
-            if (result == ERROR_SUCCESS) {
-                const auto active = SendMessageW(ownerWindow, SettingsApply, draft.opacity, draft.maximized ? 1 : 0);
-                SetDlgItemTextW(wnd, 15, active ? L"设置已保存，已发送至任务栏" : L"设置已保存；任务栏后端尚未连接");
-            } else {
-                wchar_t text[120]{}; swprintf_s(text, L"保存未完成（错误 %ld），请检查后重试。", result);
-                SetDlgItemTextW(wnd, 15, text);
-                CheckDlgButton(wnd, 14, StartupEnabled() ? BST_CHECKED : BST_UNCHECKED);
-            }
-        } else if (LOWORD(wp) == 21 || LOWORD(wp) == IDCANCEL) DestroyWindow(wnd);
-        else if (LOWORD(wp) == 22) PostMessageW(ownerWindow, WM_CLOSE, 0, 0);
-        return 0;
-    case WM_DPICHANGED: {
-        // Recreate controls with fonts and coordinates for the new monitor DPI.
-        for (HWND child = GetWindow(wnd, GW_CHILD); child; child = GetWindow(wnd, GW_CHILD)) DestroyWindow(child);
-        DeleteObject(font); DeleteObject(titleFont);
-        auto r = reinterpret_cast<RECT*>(lp);
-        SetWindowPos(wnd, nullptr, r->left, r->top, r->right-r->left, r->bottom-r->top, SWP_NOZORDER | SWP_NOACTIVATE);
-        Build(); return 0;
-    }
-    case WM_CLOSE: DestroyWindow(wnd); return 0;
-    case WM_DESTROY: DeleteObject(font); DeleteObject(titleFont); font = nullptr; titleFont = nullptr; page = nullptr; return 0;
-    }
-    return DefWindowProcW(wnd, msg, wp, lp);
-}
-}
-Preferences LoadPreferences() {
-    Preferences result; DWORD value = 0, bytes = sizeof(value);
-    if (RegGetValueW(HKEY_CURRENT_USER, Key, L"Opacity", RRF_RT_REG_DWORD, nullptr, &value, &bytes) == ERROR_SUCCESS && value <= 100) result.opacity = value;
-    bytes = sizeof(value);
-    if (RegGetValueW(HKEY_CURRENT_USER, Key, L"Maximized", RRF_RT_REG_DWORD, nullptr, &value, &bytes) == ERROR_SUCCESS) result.maximized = value != 0;
-    return result;
-}
-void ShowSettings(HWND owner, Preferences value) {
-    if (page) { ShowWindow(page, SW_RESTORE); SetForegroundWindow(page); return; }
-    draft = value; ownerWindow = owner;
-    INITCOMMONCONTROLSEX controls{sizeof(controls), ICC_BAR_CLASSES}; InitCommonControlsEx(&controls);
-    WNDCLASSW wc{}; wc.lpfnWndProc = Proc; wc.hInstance = GetModuleHandleW(nullptr);
-    wc.lpszClassName = L"LiteTaskbar.Settings"; wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
-    wc.hIcon = LoadIconW(wc.hInstance, MAKEINTRESOURCEW(101)); wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
-    RegisterClassW(&wc);
-    const auto dpi = GetDpiForSystem();
-    RECT rect{0, 0, MulDiv(560, static_cast<int>(dpi), 96), MulDiv(548, static_cast<int>(dpi), 96)};
-    constexpr DWORD style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
-    AdjustWindowRectExForDpi(&rect, style, FALSE, WS_EX_APPWINDOW | WS_EX_CONTROLPARENT, dpi);
-    page = CreateWindowExW(WS_EX_APPWINDOW | WS_EX_CONTROLPARENT, wc.lpszClassName, L"LiteTaskbar 设置", style,
-        CW_USEDEFAULT, CW_USEDEFAULT, rect.right-rect.left, rect.bottom-rect.top, owner, nullptr, wc.hInstance, nullptr);
-    ShowWindow(page, SW_SHOW); SetForegroundWindow(page);
-}
-void CloseSettings() { if (page) DestroyWindow(page); }
-bool SettingsMessage(MSG* message) { return page && IsDialogMessageW(page, message); }
-
+Preferences LoadPreferences(){if(Get(L"Migrated",0)==0){HKEY old=nullptr,newKey=nullptr;if(RegOpenKeyExW(HKEY_CURRENT_USER,OldKey,0,KEY_READ,&old)==ERROR_SUCCESS){if(RegCreateKeyExW(HKEY_CURRENT_USER,Key,0,nullptr,0,KEY_WRITE,nullptr,&newKey,nullptr)==ERROR_SUCCESS){RegCopyTreeW(old,nullptr,newKey);RegCloseKey(newKey);}RegCloseKey(old);}if(OwnedOld(RunValue(L"LiteTaskbar"))&&RunValue(L"TidyDesk").empty()){if(Startup(true)!=ERROR_SUCCESS)return {Get(L"Opacity",0),Get(L"Maximized",0)!=0,false,0};}Put(L"Migrated",1);}
+ Preferences p;p.opacity=(std::min)(100UL,Get(L"Opacity",0));p.maximized=Get(L"Maximized",0)!=0;p.desktop=Get(L"Desktop",0)!=0;p.theme=(std::min)(2UL,Get(L"Theme",0));return p;}
+void ShowSettings(HWND owner,Preferences value){if(page){ShowWindow(page,SW_RESTORE);SetForegroundWindow(page);return;}draft=value;draft.theme=Get(L"Theme",0);draft.desktop=Get(L"Desktop",0)!=0;ownerWindow=owner;INITCOMMONCONTROLSEX c{sizeof(c),ICC_BAR_CLASSES};InitCommonControlsEx(&c);WNDCLASSW wc{};wc.lpfnWndProc=Proc;wc.hInstance=GetModuleHandleW(nullptr);wc.lpszClassName=L"TidyDesk.Settings";wc.hCursor=LoadCursorW(nullptr,IDC_ARROW);wc.hIcon=LoadIconW(wc.hInstance,MAKEINTRESOURCEW(101));RegisterClassW(&wc);UINT dpi=GetDpiForSystem();RECT r{0,0,MulDiv(960,static_cast<int>(dpi),96),MulDiv(680,static_cast<int>(dpi),96)};AdjustWindowRectExForDpi(&r,WS_OVERLAPPEDWINDOW,FALSE,WS_EX_APPWINDOW,dpi);page=CreateWindowExW(WS_EX_APPWINDOW|WS_EX_CONTROLPARENT,wc.lpszClassName,L"TidyDesk · 整洁桌面",WS_OVERLAPPEDWINDOW,CW_USEDEFAULT,CW_USEDEFAULT,r.right-r.left,r.bottom-r.top,owner,nullptr,wc.hInstance,nullptr);ShowWindow(page,SW_SHOW);SetForegroundWindow(page);}
+void SettingsStatus(const wchar_t* text){backendStatus=text;if(page&&(active==0||active==1))Status(text);}
+void CloseSettings(){if(page)DestroyWindow(page);}
+bool SettingsMessage(MSG* m){return page&&IsDialogMessageW(page,m);}

@@ -37,7 +37,7 @@ BOOL CALLBACK Top(HWND window, LPARAM) {
 
 int wmain(int argc, wchar_t** argv) {
     if (argc == 2 && std::wcscmp(argv[1], L"--help") == 0) {
-        std::wprintf(L"LiteTaskbarProbe [--help]\nRead-only Windows/taskbar compatibility report.\n"
+        std::wprintf(L"TidyDeskProbe [--help]\nRead-only Windows/taskbar compatibility report.\n"
                      L"No taskbar changes, network access, persistence, or window titles.\n");
         return 0;
     }
@@ -45,7 +45,7 @@ int wmain(int argc, wchar_t** argv) {
         std::fwprintf(stderr, L"Unknown argument. Use --help.\n");
         return 2;
     }
-    std::wprintf(L"LiteTaskbar compatibility probe 0.1.0\n");
+    std::wprintf(L"TidyDesk compatibility probe 0.1.0\n");
     using VersionFn = NTSTATUS(WINAPI*)(PRTL_OSVERSIONINFOW);
     const auto ntdll = GetModuleHandleW(L"ntdll.dll");
     // Copy the function address to avoid MSVC's incompatible-function-cast warning.

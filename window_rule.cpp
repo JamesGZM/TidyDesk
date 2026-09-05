@@ -31,7 +31,7 @@ bool Transient(HWND window) {
     }
     return SameClass(window, L"Shell_TrayWnd") || SameClass(window, L"Shell_SecondaryTrayWnd") ||
         SameClass(window, L"#32768") || SameClass(window, L"XamlExplorerHostIslandWindow") ||
-        shellFlyout || SameClass(window, L"LiteTaskbar.Settings") ||
+        shellFlyout || SameClass(window, L"LiteTaskbar.Settings") || SameClass(window, L"TidyDesk.Settings") ||
         (GetWindowLongPtrW(window, GWL_EXSTYLE) & (WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE));
 }
 bool MaximizedOrFillsWorkArea(HWND window) {

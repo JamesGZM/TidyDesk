@@ -22,7 +22,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR command, int) {
         wcscmp(hostName, HostClass) != 0) return static_cast<int>(E_INVALIDARG);
     wchar_t path[32768]{};
     if (!GetModuleFileNameW(nullptr, path, 32768)) return static_cast<int>(E_FAIL);
-    const auto tap = std::filesystem::path(path).parent_path() / L"LiteTaskbarTap.dll";
+    const auto tap = std::filesystem::path(path).parent_path() / L"TidyDeskTap.dll";
     const HRESULT com = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     HMODULE xaml = LoadLibraryExW(L"Windows.UI.Xaml.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
     HRESULT result = HRESULT_FROM_WIN32(GetLastError());

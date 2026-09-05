@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include "shared.h"
 #include "settings.h"
+#include "desktop_model.h"
 #include "window_rule.h"
 #include <shellapi.h>
 #include <objbase.h>
@@ -78,7 +79,7 @@ void Status(const char* state, HRESULT result = S_OK) noexcept {
         std::ofstream file(folder / L"status.txt", std::ios::trunc);
         BOOL inJob = FALSE;
         const BOOL jobKnown = IsProcessInJob(GetCurrentProcess(), nullptr, &inJob);
-        file << "LiteTaskbar 0.3.1 experimental\nstate=" << state
+        file << "TidyDesk 0.4.0 experimental\nstate=" << state
              << "\nhost_pid=" << GetCurrentProcessId() << "\nexplorer_pid=" << shellPid
              << "\nbackground_elements=" << changed << "\nmaximized_rule=" << preferences.maximized
              << "\nrequested_opacity=" << preferences.opacity << "\neffective_opacity=" << effectiveOpacity
@@ -94,7 +95,7 @@ void AddTray() {
     icon.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
     icon.uCallbackMessage = TrayMessage;
     icon.hIcon = LoadIconW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(101));
-    wcscpy_s(icon.szTip, L"LiteTaskbar - experimental taskbar transparency");
+    wcscpy_s(icon.szTip, L"TidyDesk · 整洁桌面");
     if (Shell_NotifyIconW(NIM_ADD, &icon)) {
         icon.uVersion = NOTIFYICON_VERSION_4;
         Shell_NotifyIconW(NIM_SETVERSION, &icon);
@@ -103,7 +104,7 @@ void AddTray() {
 DWORD WINAPI Attach(void*) noexcept {
     HRESULT result = E_FAIL;
     try {
-        const auto helper = (folder / L"LiteTaskbarAttach.exe").wstring();
+        const auto helper = (folder / L"TidyDeskAttach.exe").wstring();
         wchar_t arguments[128]{};
         swprintf_s(arguments, L" %lu:%llu:%lu", GetCurrentProcessId(),
                    static_cast<unsigned long long>(reinterpret_cast<UINT_PTR>(host)), shellPid);
@@ -149,6 +150,7 @@ void StartAttach() {
 void Quit() {
     if (quitting) return;
     quitting = true;
+    desk::Stop();
     KillTimer(host, Deadline);
     KillTimer(host, RestartDelay);
     SetEvent(stopEvent);
@@ -164,15 +166,17 @@ LRESULT CALLBACK WindowProc(HWND wnd, UINT message, WPARAM wparam, LPARAM lparam
     }
     switch (message) {
     case ShowSettingsMessage: ShowSettings(host, preferences); return 0;
+    case SettingsRetry: StartAttach(); return 0;
     case SettingsApply:
         if (wparam <= 100) { preferences.opacity = static_cast<unsigned>(wparam); preferences.maximized = lparam != 0; ConfigureRule(); }
         return attached && !backendFailed ? 1 : 0;
     case WM_CLOSE: Quit(); return 0;
     case WM_QUERYENDSESSION: SetEvent(stopEvent); return TRUE;
     case WM_APP + 15: Status("backend_stage", static_cast<HRESULT>(wparam)); return 0;
-    case MsgAttached: backend = reinterpret_cast<HWND>(wparam); Status("attached"); UpdateOpacity(); attached = true; if (quitting) SetEvent(stopEvent); return 0;
+    case MsgAttached: backend = reinterpret_cast<HWND>(wparam); Status("attached"); UpdateOpacity(); attached = true; SettingsStatus(L"任务栏已连接，等待背景确认"); if (quitting) SetEvent(stopEvent); return 0;
     case MsgChanged:
         changed = static_cast<unsigned>(wparam);
+        SettingsStatus(changed ? (effectiveOpacity == 100 ? L"已生效：系统背景" : L"已生效：自定义背景") : L"已连接，但未找到背景元素");
         if (changed) KillTimer(wnd, Deadline);
         Status(changed ? (effectiveOpacity == 100 ? "system_default" : "custom_background") : "no_background_elements");
         return 0;
@@ -180,7 +184,7 @@ LRESULT CALLBACK WindowProc(HWND wnd, UINT message, WPARAM wparam, LPARAM lparam
         backendFailed = true;
         KillTimer(wnd, Deadline);
         Status("backend_error", static_cast<HRESULT>(wparam));
-        if (!quitting) MessageBoxW(wnd, L"任务栏后端未能应用效果。偏好设置仍可保存。\n请查看 status.txt 和 events.txt。若 Windows XAML 服务异常，可在方便时重启资源管理器后重试。", L"LiteTaskbar", MB_OK | MB_ICONINFORMATION);
+        SettingsStatus(L"任务栏连接失败：设置已保留，可手动重连或查看诊断日志。");
         return 0;
     case MsgRestored:
         changed = 0;
@@ -193,7 +197,7 @@ LRESULT CALLBACK WindowProc(HWND wnd, UINT message, WPARAM wparam, LPARAM lparam
         if (FAILED(static_cast<HRESULT>(wparam))) {
             KillTimer(wnd, Deadline);
             Status("attach_failed", static_cast<HRESULT>(wparam));
-            if (!quitting) MessageBoxW(wnd, L"无法连接任务栏。请查看程序目录中的 status.txt。\n未启动轮询，也不会自动重试。", L"LiteTaskbar", MB_OK | MB_ICONINFORMATION);
+            SettingsStatus(L"无法连接任务栏；未持续重试。请查看诊断日志。");
         }
         return 0;
     case WM_TIMER:
@@ -203,7 +207,7 @@ LRESULT CALLBACK WindowProc(HWND wnd, UINT message, WPARAM wparam, LPARAM lparam
             if (!changed) {
                 Status("no_supported_background_found");
                 SetEvent(stopEvent);
-                MessageBoxW(wnd, L"未找到可修改的任务栏背景。本次连接将停止。\n请查看 status.txt；这不代表系统已透明。", L"LiteTaskbar", MB_OK | MB_ICONINFORMATION);
+                SettingsStatus(L"未找到支持的任务栏背景，本次连接已停止。");
             }
         } else if (wparam == ShutdownDeadline) {
             Status("exit_restore_not_confirmed");
@@ -238,7 +242,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR command, int) {
     if (wcscmp(command, L"--self-test") == 0) {
         wchar_t testPath[32768]{};
         if (!GetModuleFileNameW(nullptr, testPath, 32768)) return 10;
-        const auto dllPath = std::filesystem::path(testPath).parent_path() / L"LiteTaskbarTap.dll";
+        const auto dllPath = std::filesystem::path(testPath).parent_path() / L"TidyDeskTap.dll";
         HMODULE dll = LoadLibraryExW(dllPath.c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
         if (!dll) return 11;
         using GetFactory = HRESULT(__stdcall*)(REFCLSID, REFIID, void**);
@@ -277,9 +281,9 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR command, int) {
     const DWORD length = GetModuleFileNameW(nullptr, path, 32768);
     if (!length || length >= 32768) { CloseHandle(singleton); return 4; }
     folder = std::filesystem::path(path).parent_path();
-    if (GetFileAttributesW((folder / L"LiteTaskbarTap.dll").c_str()) == INVALID_FILE_ATTRIBUTES ||
-        GetFileAttributesW((folder / L"LiteTaskbarAttach.exe").c_str()) == INVALID_FILE_ATTRIBUTES) {
-        MessageBoxW(nullptr, L"请解压全部文件到同一目录后再运行。", L"LiteTaskbar", MB_OK);
+    if (GetFileAttributesW((folder / L"TidyDeskTap.dll").c_str()) == INVALID_FILE_ATTRIBUTES ||
+        GetFileAttributesW((folder / L"TidyDeskAttach.exe").c_str()) == INVALID_FILE_ATTRIBUTES) {
+        MessageBoxW(nullptr, L"请解压全部文件到同一目录后再运行。", L"TidyDesk", MB_OK);
         CloseHandle(singleton); return 5;
     }
     wchar_t eventName[96]{};
@@ -288,12 +292,13 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR command, int) {
     if (!stopEvent) { CloseHandle(singleton); return 6; }
     WNDCLASSW wc{}; wc.lpfnWndProc = WindowProc; wc.hInstance = instance; wc.lpszClassName = HostClass;
     if (!RegisterClassW(&wc)) { CloseHandle(stopEvent); CloseHandle(singleton); return 7; }
-    host = CreateWindowExW(WS_EX_TOOLWINDOW, HostClass, L"LiteTaskbar", WS_POPUP,
+    host = CreateWindowExW(WS_EX_TOOLWINDOW, HostClass, L"TidyDesk", WS_POPUP,
                            0, 0, 0, 0, nullptr, nullptr, instance, nullptr);
     if (!host) { CloseHandle(stopEvent); CloseHandle(singleton); return 8; }
     taskbarCreated = RegisterWindowMessageW(L"TaskbarCreated");
     preferences = LoadPreferences();
     AddTray(); ConfigureRule(); StartAttach();
+    if (preferences.desktop) desk::Start(host);
     if (!background) ShowSettings(host, preferences);
     MSG message{};
     while (GetMessageW(&message, nullptr, 0, 0) > 0) { if (!SettingsMessage(&message)) { TranslateMessage(&message); DispatchMessageW(&message); } }
