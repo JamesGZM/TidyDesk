@@ -55,7 +55,7 @@ struct Frame {
 void Persist(){if(rebuilding)return;std::vector<desk::Box> boxes;for(auto& f:frames)boxes.push_back(f->box);if(!desk::Save(boxes))MessageBoxW(controller,L"布局保存失败。文件仍保留在原文件夹。",L"TidyDesk",MB_OK|MB_ICONWARNING);}
 void Rounded(GraphicsPath& p,REAL x,REAL y,REAL w,REAL h,REAL radius){REAL d=radius*2;p.AddArc(x,y,d,d,180,90);p.AddArc(x+w-d,y,d,d,270,90);p.AddArc(x+w-d,y+h-d,d,d,0,90);p.AddArc(x,y+h-d,d,d,90,90);p.CloseFigure();}
 void Text(Graphics& g,const std::wstring& text,RectF r,REAL size,bool symbol=false){
- FontFamily family(symbol?L"Segoe Fluent Icons":L"Microsoft YaHei UI");StringFormat format;format.SetAlignment(StringAlignmentCenter);format.SetLineAlignment(StringAlignmentCenter);format.SetTrimming(StringTrimmingEllipsisCharacter);
+ FontFamily family(symbol?L"Segoe MDL2 Assets":L"Microsoft YaHei UI");StringFormat format;format.SetAlignment(StringAlignmentCenter);format.SetLineAlignment(StringAlignmentCenter);format.SetTrimming(StringTrimmingEllipsisCharacter);
  GraphicsPath path;path.AddString(text.c_str(),-1,&family,FontStyleRegular,size,r,&format);
  Pen outline(Color(150,15,20,30),2.0f);outline.SetLineJoin(LineJoinRound);SolidBrush ink(Color(245,245,247,250));g.DrawPath(&outline,&path);g.FillPath(&ink,&path);
 }
