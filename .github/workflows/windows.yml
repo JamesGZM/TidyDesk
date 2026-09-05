@@ -27,9 +27,33 @@ jobs:
           New-Item -ItemType Directory -Path package | Out-Null
           Copy-Item build/Release/*.exe, build/Release/LiteTaskbarTap.dll, LICENSE, README.md -Destination package
           Get-ChildItem package -File | Where-Object Extension -in '.exe','.dll' | Get-FileHash -Algorithm SHA256 | ForEach-Object { "$($_.Hash.ToLower())  $([IO.Path]::GetFileName($_.Path))" } | Set-Content package/SHA256SUMS.txt
+      - name: Build per-user installer
+        shell: pwsh
+        run: |
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" installer.iss
+          if ($LASTEXITCODE -ne 0) { throw "Installer compilation failed" }
+      - name: Test installation and uninstall
+        shell: pwsh
+        run: |
+          $testInstall = Join-Path $env:RUNNER_TEMP 'LiteTaskbar-install-test'
+          $setup = (Resolve-Path package/LiteTaskbar-0.3.1-Setup.exe).Path
+          $setupProcess = Start-Process $setup -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/TASKS=',"/DIR=`"$testInstall`"") -WindowStyle Hidden -PassThru -Wait
+          if ($setupProcess.ExitCode -ne 0) { throw "Install failed: $($setupProcess.ExitCode)" }
+          if (!(Test-Path "$testInstall/0.3.1/LiteTaskbar.exe")) { throw 'Installed application missing' }
+          $uninstallKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\{F33B8E61-F180-40F4-9377-455BBBCE67A1}_is1'
+          if (!(Test-Path $uninstallKey)) { throw 'Uninstall registration missing' }
+          $shortcut = Join-Path ([Environment]::GetFolderPath('StartMenu')) 'Programs/LiteTaskbar/LiteTaskbar.lnk'
+          if (!(Test-Path $shortcut)) { throw 'Start menu shortcut missing' }
+          $uninstallProcess = Start-Process "$testInstall/unins000.exe" -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -WindowStyle Hidden -PassThru -Wait
+          if ($uninstallProcess.ExitCode -ne 0) { throw 'Uninstall failed' }
+          if (Test-Path "$testInstall/0.3.1/LiteTaskbar.exe") { throw 'Application remained after uninstall' }
+          if (Test-Path $uninstallKey) { throw 'Uninstall registration remained' }
+          if (Test-Path $shortcut) { throw 'Start menu shortcut remained' }
+          Get-FileHash $setup -Algorithm SHA256 | ForEach-Object { "$($_.Hash.ToLower())  $([IO.Path]::GetFileName($_.Path))" } | Set-Content package/INSTALLER-SHA256.txt
       - uses: actions/upload-artifact@v4
         with:
           name: LiteTaskbar-experimental-windows-x64
           path: package/
           if-no-files-found: error
           retention-days: 14
+
