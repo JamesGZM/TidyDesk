@@ -76,10 +76,13 @@ void Status(const char* state, HRESULT result = S_OK) noexcept {
             trace << GetTickCount64() << ' ' << state << ' ' << changed << " 0x" << std::hex << static_cast<unsigned long>(result) << '\n';
         }
         std::ofstream file(folder / L"status.txt", std::ios::trunc);
-        file << "LiteTaskbar 0.3.0 experimental\nstate=" << state
+        BOOL inJob = FALSE;
+        const BOOL jobKnown = IsProcessInJob(GetCurrentProcess(), nullptr, &inJob);
+        file << "LiteTaskbar 0.3.1 experimental\nstate=" << state
              << "\nhost_pid=" << GetCurrentProcessId() << "\nexplorer_pid=" << shellPid
              << "\nbackground_elements=" << changed << "\nmaximized_rule=" << preferences.maximized
              << "\nrequested_opacity=" << preferences.opacity << "\neffective_opacity=" << effectiveOpacity
+             << "\nprocess_in_job=" << (jobKnown ? (inJob ? "yes" : "no") : "unknown")
              << "\nhresult=0x" << std::hex
              << static_cast<unsigned long>(result) << '\n';
     } catch (...) {}
@@ -299,4 +302,5 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR command, int) {
     CloseHandle(singleton);
     return 0;
 }
+
 

@@ -2,7 +2,13 @@
 
 原生 C++ 的 Windows 11 任务栏透明工具，MIT 开源，无浏览器运行时、无遥测、无运行时网络请求。
 
-## 使用
+## 安装版（0.3.1 实验版）
+
+云端构建现在同时生成 `LiteTaskbar-0.3.1-Setup.exe`。安装时可选择桌面快捷方式与登录自启，默认放到当前用户的 `AppData\Local\Programs\LiteTaskbar`；以后从桌面或开始菜单启动，无需打开 Codex。Windows“已安装的应用”中提供卸载入口。限制见 `INSTALL-NOTES.txt`。
+
+安装程序使用版本子目录，避免升级时覆盖仍被 Explorer 占用的后端 DLL。云端自动测试安装、快捷方式、卸载注册与清理。关闭 Codex 后的实际运行情况仍需独立验证，安装本身不代表这项测试已经通过。
+
+## 便携版使用
 
 从 [Releases](https://github.com/JamesGZM/LiteTaskbar/releases) 下载实验版 ZIP，解压全部文件到固定目录，双击 `LiteTaskbar.exe`。需要 Windows 11 现代 XAML 任务栏和 x64 系统；不需要管理员权限。
 

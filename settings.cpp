@@ -63,7 +63,7 @@ void Build() {
     SendMessageW(logo, STM_SETICON, reinterpret_cast<WPARAM>(LoadIconW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(101))), 0);
     auto title = Control(L"STATIC", L"LiteTaskbar", 0, 2, 80, 20, 380, 38);
     SendMessageW(title, WM_SETFONT, reinterpret_cast<WPARAM>(titleFont), TRUE);
-    Control(L"STATIC", L"轻量任务栏 · 0.3.0 实验版", 0, 3, 80, 62, 430, 25);
+    Control(L"STATIC", L"轻量任务栏 · 0.3.1 实验版", 0, 3, 80, 62, 430, 25);
     Control(L"STATIC", L"任务栏外观", 0, 4, 28, 110, 490, 26);
     Control(L"STATIC", L"", 0, 11, 28, 148, 505, 28);
     auto slider = Control(TRACKBAR_CLASSW, L"背景不透明度", TBS_AUTOTICKS | WS_TABSTOP, 12, 24, 182, 510, 42);
@@ -144,3 +144,4 @@ void ShowSettings(HWND owner, Preferences value) {
 }
 void CloseSettings() { if (page) DestroyWindow(page); }
 bool SettingsMessage(MSG* message) { return page && IsDialogMessageW(page, message); }
+

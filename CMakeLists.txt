@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(LiteTaskbar VERSION 0.3.0 LANGUAGES CXX RC)
+project(LiteTaskbar VERSION 0.3.1 LANGUAGES CXX RC)
 if(NOT WIN32)
   message(FATAL_ERROR "LiteTaskbar requires Windows")
 endif()
@@ -31,3 +31,4 @@ add_test(NAME desktop-maximized-window-rule COMMAND LiteTaskbar --test-window-ru
 if(MSVC)
   target_link_options(LiteTaskbar PRIVATE /MANIFEST:NO)
 endif()
+
