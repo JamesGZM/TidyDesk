@@ -2,6 +2,7 @@
 #include "desktop_model.h"
 #include <commctrl.h>
 #include <windowsx.h>
+#include <shellapi.h>
 #include <shlobj.h>
 #include <wrl/client.h>
 #include <thread>

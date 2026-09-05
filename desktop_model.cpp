@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "desktop_model.h"
+#include <shellapi.h>
 #include <shlobj.h>
 #include <wrl/client.h>
 #include <fstream>
@@ -29,7 +30,7 @@ std::vector<Box> Load() {
 bool Save(const std::vector<Box>& boxes) {
  try { auto dir=DataDir();std::filesystem::create_directories(dir);auto temp=dir/L"layout.tmp", dest=dir/L"layout.ini",bak=dir/L"layout.bak";
  // UTF-16 BOM ensures Windows INI APIs preserve non-ASCII paths.
- {std::ofstream f(temp,std::ios::binary|std::ios::trunc);const char bom[]={char(0xff),char(0xfe)};f.write(bom,2);if(!f)return false;}
+ {std::ofstream f(temp,std::ios::binary|std::ios::trunc);const char bom[]={-1,-2};f.write(bom,2);if(!f)return false;}
  bool ok=true;auto put=[&](const std::wstring& s,const wchar_t* k,const std::wstring& v){ok=WritePrivateProfileStringW(s.c_str(),k,v.c_str(),temp.c_str())&&ok;};
  put(L"Layout",L"Version",L"1");put(L"Layout",L"Count",std::to_wstring(boxes.size()));
  for(size_t i=0;i<boxes.size();++i){const auto& b=boxes[i];auto s=L"Box"+std::to_wstring(i);put(s,L"Id",b.id);put(s,L"Name",b.name);put(s,L"Path",b.path);
