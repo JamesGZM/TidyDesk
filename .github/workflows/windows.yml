@@ -25,7 +25,7 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Path package | Out-Null
-          Copy-Item build/Release/LiteTaskbar.exe, build/Release/LiteTaskbarTap.dll, build/Release/LiteTaskbarProbe.exe, LICENSE, README.md -Destination package
+          Copy-Item build/Release/*.exe, build/Release/LiteTaskbarTap.dll, LICENSE, README.md -Destination package
           Get-ChildItem package -File | Where-Object Extension -in '.exe','.dll' | Get-FileHash -Algorithm SHA256 | ForEach-Object { "$($_.Hash.ToLower())  $([IO.Path]::GetFileName($_.Path))" } | Set-Content package/SHA256SUMS.txt
       - uses: actions/upload-artifact@v4
         with:
