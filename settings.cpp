@@ -95,8 +95,8 @@ LRESULT CALLBACK Proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
             draft.maximized = IsDlgButtonChecked(wnd, 13) == BST_CHECKED;
             const auto result = Save(IsDlgButtonChecked(wnd, 14) == BST_CHECKED);
             if (result == ERROR_SUCCESS) {
-                SendMessageW(ownerWindow, SettingsApply, draft.opacity, draft.maximized ? 1 : 0);
-                SetDlgItemTextW(wnd, 15, L"设置已保存并应用");
+                const auto active = SendMessageW(ownerWindow, SettingsApply, draft.opacity, draft.maximized ? 1 : 0);
+                SetDlgItemTextW(wnd, 15, active ? L"设置已保存，已发送至任务栏" : L"设置已保存；任务栏后端尚未连接");
             } else {
                 wchar_t text[120]{}; swprintf_s(text, L"保存未完成（错误 %ld），请检查后重试。", result);
                 SetDlgItemTextW(wnd, 15, text);

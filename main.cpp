@@ -25,6 +25,7 @@ DWORD shellPid = 0;
 UINT taskbarCreated = 0;
 bool quitting = false;
 bool attached = false;
+bool backendFailed = false;
 unsigned changed = 0;
 std::atomic<bool> attaching{false};
 NOTIFYICONDATAW icon{};
@@ -54,8 +55,11 @@ void ConfigureRule() {
 
 void Status(const char* state, HRESULT result = S_OK) noexcept {
     try {
-        std::ofstream trace(folder / L"events.txt", std::ios::app);
-        trace << GetTickCount64() << ' ' << state << ' ' << changed << " 0x" << std::hex << static_cast<unsigned long>(result) << '\n';
+        const auto log = folder / L"events.txt";
+        if (!std::filesystem::exists(log) || std::filesystem::file_size(log) < 65536) {
+            std::ofstream trace(log, std::ios::app);
+            trace << GetTickCount64() << ' ' << state << ' ' << changed << " 0x" << std::hex << static_cast<unsigned long>(result) << '\n';
+        }
         std::ofstream file(folder / L"status.txt", std::ios::trunc);
         file << "LiteTaskbar 0.3.0 experimental\nstate=" << state
              << "\nhost_pid=" << GetCurrentProcessId() << "\nexplorer_pid=" << shellPid
@@ -113,6 +117,8 @@ void StartAttach() {
     shellPid = pid;
     changed = 0;
     attached = false;
+    backend = nullptr;
+    backendFailed = false;
     ResetEvent(stopEvent);
     Status("attaching");
     SetTimer(host, Deadline, 10000, nullptr);
@@ -140,7 +146,7 @@ LRESULT CALLBACK WindowProc(HWND wnd, UINT message, WPARAM wparam, LPARAM lparam
     case ShowSettingsMessage: ShowSettings(host, preferences); return 0;
     case SettingsApply:
         if (wparam <= 100) { preferences.opacity = static_cast<unsigned>(wparam); preferences.maximized = lparam != 0; ConfigureRule(); }
-        return 0;
+        return attached && !backendFailed ? 1 : 0;
     case WM_CLOSE: Quit(); return 0;
     case WM_QUERYENDSESSION: SetEvent(stopEvent); return TRUE;
     case WM_APP + 15: Status("backend_stage", static_cast<HRESULT>(wparam)); return 0;
@@ -150,11 +156,17 @@ LRESULT CALLBACK WindowProc(HWND wnd, UINT message, WPARAM wparam, LPARAM lparam
         if (changed) KillTimer(wnd, Deadline);
         Status(changed ? (effectiveOpacity == 100 ? "system_default" : "custom_background") : "no_background_elements");
         return 0;
-    case MsgError: Status("backend_error", static_cast<HRESULT>(wparam)); return 0;
+    case MsgError:
+        backendFailed = true;
+        KillTimer(wnd, Deadline);
+        Status("backend_error", static_cast<HRESULT>(wparam));
+        if (!quitting) MessageBoxW(wnd, L"任务栏后端未能应用效果。偏好设置仍可保存。\n请查看 status.txt 和 events.txt。若 Windows XAML 服务异常，可在方便时重启资源管理器后重试。", L"LiteTaskbar", MB_OK | MB_ICONINFORMATION);
+        return 0;
     case MsgRestored:
         changed = 0;
         attached = false;
-        Status(wparam ? "restore_failed" : "restored", wparam ? E_FAIL : S_OK);
+        backend = nullptr;
+        if (!backendFailed || quitting) Status(wparam ? "restore_failed" : "restored", wparam ? E_FAIL : S_OK);
         if (quitting) DestroyWindow(wnd);
         return 0;
     case AttachResult:
