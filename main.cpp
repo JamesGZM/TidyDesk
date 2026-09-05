@@ -34,13 +34,12 @@ Preferences preferences;
 HWND backend = nullptr;
 HWINEVENTHOOK foregroundHook = nullptr, locationHook = nullptr;
 HWINEVENTHOOK minimizeHook = nullptr, lifetimeHook = nullptr;
-ForegroundRule foregroundRule;
+bool ruleUpdatePending = false;
 unsigned effectiveOpacity = 0;
 HWND lastSentBackend = nullptr;
 unsigned lastSentOpacity = 101;
 void UpdateOpacity() {
-    const auto active = GetForegroundWindow();
-    effectiveOpacity = preferences.maximized && foregroundRule.Evaluate(active) ? 100U : preferences.opacity;
+    effectiveOpacity = preferences.maximized && HasMaximizedWindow() ? 100U : preferences.opacity;
     if (backend && (backend != lastSentBackend || effectiveOpacity != lastSentOpacity)) {
         if (PostMessageW(backend, MsgSetOpacity, effectiveOpacity, 0)) {
             lastSentBackend = backend;
@@ -50,8 +49,8 @@ void UpdateOpacity() {
 }
 void CALLBACK WindowEvent(HWINEVENTHOOK, DWORD event, HWND window, LONG object, LONG, DWORD, DWORD) {
     if (event == EVENT_SYSTEM_FOREGROUND || event == EVENT_SYSTEM_MINIMIZESTART || event == EVENT_SYSTEM_MINIMIZEEND ||
-        (object == OBJID_WINDOW && (window == GetForegroundWindow() || window == foregroundRule.TrackedWindow())))
-        SetTimer(host, 4, 120, nullptr);
+        (object == OBJID_WINDOW && (!window || GetAncestor(window, GA_ROOT) == window || event == EVENT_OBJECT_DESTROY)))
+        if (!ruleUpdatePending) ruleUpdatePending = SetTimer(host, 4, 160, nullptr) != 0;
 }
 void ConfigureRule() {
     if (foregroundHook) UnhookWinEvent(foregroundHook);
@@ -195,7 +194,7 @@ LRESULT CALLBACK WindowProc(HWND wnd, UINT message, WPARAM wparam, LPARAM lparam
         }
         return 0;
     case WM_TIMER:
-        if (wparam == 4) { KillTimer(wnd, 4); UpdateOpacity(); return 0; }
+        if (wparam == 4) { KillTimer(wnd, 4); ruleUpdatePending = false; UpdateOpacity(); return 0; }
         if (wparam == Deadline) {
             KillTimer(wnd, Deadline);
             if (!changed) {
@@ -232,7 +231,7 @@ LRESULT CALLBACK WindowProc(HWND wnd, UINT message, WPARAM wparam, LPARAM lparam
 }
 }
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR command, int) {
-    if (wcscmp(command, L"--test-window-rule") == 0) return TestForegroundRule();
+    if (wcscmp(command, L"--test-window-rule") == 0) return TestWindowRule();
     if (wcscmp(command, L"--self-test") == 0) {
         wchar_t testPath[32768]{};
         if (!GetModuleFileNameW(nullptr, testPath, 32768)) return 10;

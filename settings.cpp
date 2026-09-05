@@ -70,7 +70,7 @@ void Build() {
     SendMessageW(slider, TBM_SETRANGE, TRUE, MAKELPARAM(0, 100));
     SendMessageW(slider, TBM_SETTICFREQ, 25, 0);
     SendMessageW(slider, TBM_SETPOS, TRUE, draft.opacity);
-    auto rule = Control(L"BUTTON", L"当前窗口最大化时，使用系统默认背景", BS_AUTOCHECKBOX | WS_TABSTOP, 13, 28, 244, 500, 28);
+    auto rule = Control(L"BUTTON", L"桌面存在最大化窗口时，使用系统默认背景", BS_AUTOCHECKBOX | WS_TABSTOP, 13, 28, 244, 500, 28);
     SendMessageW(rule, BM_SETCHECK, draft.maximized ? BST_CHECKED : BST_UNCHECKED, 0);
     Control(L"STATIC", L"启动与托盘", 0, 5, 28, 298, 490, 26);
     auto startup = Control(L"BUTTON", L"登录 Windows 时自动启动", BS_AUTOCHECKBOX | WS_TABSTOP, 14, 28, 336, 495, 28);

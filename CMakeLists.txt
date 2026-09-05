@@ -26,7 +26,7 @@ add_test(NAME cli-help COMMAND LiteTaskbarProbe --help)
 add_test(NAME invalid-argument COMMAND LiteTaskbarProbe --invalid)
 set_tests_properties(invalid-argument PROPERTIES WILL_FAIL TRUE)
 add_test(NAME host-startup-self-test COMMAND LiteTaskbar --self-test)
-add_test(NAME foreground-window-rule COMMAND LiteTaskbar --test-window-rule)
+add_test(NAME desktop-maximized-window-rule COMMAND LiteTaskbar --test-window-rule)
 
 if(MSVC)
   target_link_options(LiteTaskbar PRIVATE /MANIFEST:NO)

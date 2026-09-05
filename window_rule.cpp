@@ -48,19 +48,22 @@ bool MaximizedOrFillsWorkArea(HWND window) {
         bounds.right >= monitor.rcWork.right - tolerance && bounds.bottom >= monitor.rcWork.bottom - tolerance;
 }
 }
-bool ForegroundRule::Evaluate(HWND foreground) {
-    if (!Usable(previous)) previous = nullptr;
-    if (foreground && (SameClass(foreground, L"Progman") || SameClass(foreground, L"WorkerW"))) {
-        previous = nullptr;
-        return false;
-    }
-    // Owned dialogs inherit their application's state. Shell flyouts, menus and
-    // this settings page do not replace the last real foreground application.
-    HWND root = foreground ? GetAncestor(foreground, GA_ROOTOWNER) : nullptr;
-    if (root && Usable(root) && !Transient(root) && !Transient(foreground)) previous = root;
-    return MaximizedOrFillsWorkArea(previous);
+bool HasMaximizedWindow(DWORD onlyProcess) {
+    struct Query { DWORD process; bool found; } query{onlyProcess, false};
+    EnumWindows([](HWND window, LPARAM context) -> BOOL {
+        auto& scan = *reinterpret_cast<Query*>(context);
+        if (scan.process) {
+            DWORD pid = 0; GetWindowThreadProcessId(window, &pid);
+            if (pid != scan.process) return TRUE;
+        }
+        if (GetAncestor(window, GA_ROOT) != window || !Usable(window) || Transient(window) ||
+            SameClass(window, L"Progman") || SameClass(window, L"WorkerW")) return TRUE;
+        if (MaximizedOrFillsWorkArea(window)) { scan.found = true; return FALSE; }
+        return TRUE;
+    }, reinterpret_cast<LPARAM>(&query));
+    return query.found;
 }
-int TestForegroundRule() {
+int TestWindowRule() {
     WNDCLASSW wc{}; wc.lpfnWndProc = DefWindowProcW; wc.hInstance = GetModuleHandleW(nullptr);
     wc.lpszClassName = L"LiteTaskbar.RuleTest";
     RegisterClassW(&wc);
@@ -76,15 +79,17 @@ int TestForegroundRule() {
     if (a && b && dialog && tool) {
         ShowWindow(a, SW_SHOWMAXIMIZED); ShowWindow(b, SW_SHOWNOACTIVATE);
         ShowWindow(dialog, SW_SHOWNOACTIVATE); ShowWindow(tool, SW_SHOWNOACTIVATE);
-        ForegroundRule rule;
-        const bool max = rule.Evaluate(a);
-        const bool popup = rule.Evaluate(dialog);
-        const bool flyout = rule.Evaluate(tool);
-        const bool normal = rule.Evaluate(b);
+        const auto pid = GetCurrentProcessId();
+        SetForegroundWindow(b);
+        const bool behindNormal = HasMaximizedWindow(pid);
+        SetForegroundWindow(dialog);
+        const bool behindDialog = HasMaximizedWindow(pid);
+        ShowWindow(a, SW_MINIMIZE);
+        const bool allNormal = HasMaximizedWindow(pid);
         ShowWindow(b, SW_SHOWMAXIMIZED);
-        const bool secondMax = rule.Evaluate(b);
-        ShowWindow(b, SW_MINIMIZE);
-        const bool minimized = rule.Evaluate(tool);
+        const bool secondMax = HasMaximizedWindow(pid);
+        ShowWindow(b, SW_HIDE);
+        const bool hidden = HasMaximizedWindow(pid);
         ShowWindow(b, SW_RESTORE);
         SetWindowLongPtrW(b, GWL_STYLE, WS_POPUP | WS_VISIBLE);
         MONITORINFO monitor{sizeof(monitor)};
@@ -93,8 +98,8 @@ int TestForegroundRule() {
             monitor.rcWork.right - monitor.rcWork.left, monitor.rcWork.bottom - monitor.rcWork.top,
             SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
         DwmFlush();
-        const bool borderless = rule.Evaluate(b);
-        result = max && popup && flyout && !normal && secondMax && !minimized && borderless ? 0 : 2;
+        const bool borderless = HasMaximizedWindow(pid);
+        result = behindNormal && behindDialog && !allNormal && secondMax && !hidden && borderless ? 0 : 2;
     }
     if (tool) DestroyWindow(tool);
     if (dialog) DestroyWindow(dialog);
@@ -102,3 +107,4 @@ int TestForegroundRule() {
     if (a) DestroyWindow(a);
     return result;
 }
+
