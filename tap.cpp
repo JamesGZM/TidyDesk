@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: MIT
 // Original implementation using the Windows SDK XAML diagnostics interfaces.
 #include "shared.h"
+#undef GetCurrentTime
+#pragma comment(linker, "/export:DllGetClassObject")
+#pragma comment(linker, "/export:DllCanUnloadNow")
 #include <windows.ui.xaml.h>
 #include <xamlom.h>
 #include <ocidl.h>
@@ -107,7 +110,7 @@ class Tap final : public RuntimeClass<RuntimeClassFlags<ClassicCom>, IObjectWith
         }
         if (message == WM_NCDESTROY) {
             SetWindowLongPtrW(wnd, GWLP_USERDATA, 0);
-            self->Release(); // UI-window lifetime reference.
+            if (self->window == wnd) self->Release(); // UI-window lifetime reference.
         }
         return DefWindowProcW(wnd, message, wparam, lparam);
     }
@@ -223,14 +226,14 @@ public:
     HRESULT STDMETHODCALLTYPE LockServer(BOOL) override { return S_OK; }
 };
 }
-extern "C" __declspec(dllexport) HRESULT __stdcall DllGetClassObject(REFCLSID clsid, REFIID iid, void** output) {
+STDAPI DllGetClassObject(REFCLSID clsid, REFIID iid, void** output) {
     if (!output) return E_POINTER;
     *output = nullptr;
     if (clsid != TapClsid) return CLASS_E_CLASSNOTAVAILABLE;
     auto factory = Make<Factory>();
     return factory ? factory->QueryInterface(iid, output) : E_OUTOFMEMORY;
 }
-extern "C" __declspec(dllexport) HRESULT __stdcall DllCanUnloadNow() { return S_FALSE; }
+STDAPI DllCanUnloadNow() { return S_FALSE; }
 BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID) {
     if (reason == DLL_PROCESS_ATTACH) { moduleHandle = instance; DisableThreadLibraryCalls(instance); }
     return TRUE;
