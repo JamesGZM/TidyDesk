@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(TidyDesk VERSION 0.4.2 LANGUAGES CXX RC)
+project(TidyDesk VERSION 0.4.3 LANGUAGES CXX RC)
 if(NOT WIN32)
   message(FATAL_ERROR "TidyDesk requires Windows")
 endif()
@@ -37,7 +37,8 @@ endif()
 
 
 target_link_libraries(TidyDeskDesktop PRIVATE user32 shell32 ole32 uuid comctl32 comdlg32 gdi32 gdiplus advapi32)
-target_link_libraries(TidyDeskIcons PRIVATE user32 shell32 ole32 advapi32)
+target_link_libraries(TidyDeskIcons PRIVATE user32 shell32 ole32 advapi32 gdi32)
+add_test(NAME shortcut-overlay-rendering COMMAND TidyDeskIcons --test-overlay)
 add_test(NAME desktop-model-recovery COMMAND TidyDeskDesktop --test-model)
 add_test(NAME shortcut-arrow-backup COMMAND TidyDeskIcons --test-backup)
 target_link_libraries(TidyDeskTests PRIVATE user32 shell32 ole32 uuid advapi32)
