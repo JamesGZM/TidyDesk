@@ -4,9 +4,11 @@
 
 ## 当前状态
 
-0.2.0 实验版本：已实现原生托盘程序和 XAML 透明后端，目标为 Windows 11 22H2 及以后的 x64 系统。尚未完成实机兼容性和性能验证，不作为稳定版发布。10 MB 内存和低 CPU 是目标，不是实测承诺。
+0.2.1 实验版本：已实现原生托盘程序和 XAML 透明后端，目标为 Windows 11 22H2 及以后的 x64 系统。0.2.0 已在一台 Windows 11 25H2 机器上确认透明效果、图标和点击正常；0.2.1 正在验证内存优化及退出恢复。不作为稳定版发布。10 MB 内存和低 CPU 是目标，不是实测承诺。
 
-解压全部文件到可写目录，双击 `LiteTaskbar.exe`。单击托盘图标可查看状态或退出恢复；也可以运行 `LiteTaskbar.exe --stop`。不需要管理员权限，不修改注册表，不默认开机启动。`status.txt` 中 `state=transparent` 表示已修改背景元素；仍需肉眼确认效果。
+解压全部文件到可写目录，双击 `LiteTaskbar.exe`。单击托盘图标可查看状态或退出恢复；也可以双击 `LiteTaskbarStop.exe`，或运行 `LiteTaskbar.exe --stop`。不需要管理员权限，不修改注册表，不默认开机启动。`status.txt` 中 `state=transparent` 表示已修改背景元素；仍需肉眼确认效果。
+
+`LiteTaskbarAttach.exe` 仅在连接时短暂运行，完成后退出。常驻主程序不加载 XAML 运行时；无文本输入的托盘线程关闭自身的输入法支持，不改变系统或其他程序的输入法设置。
 
 只修改运行时类型精确匹配 `Taskbar.TaskbarBackground` 的元素，不修改图标和交互区域。通过 Windows XAML 诊断 API 将 `LiteTaskbarTap.dll` 加载到当前会话的 Explorer。空闲时等待事件，不使用周期轮询；启动有一次 10 秒超时，退出有一次 5 秒超时。Explorer 重建后事件触发重新连接。
 

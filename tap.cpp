@@ -47,15 +47,16 @@ class Tap final : public RuntimeClass<RuntimeClassFlags<ClassicCom>, IObjectWith
 
     void ReportError(HRESULT error) noexcept { PostMessageW(host, MsgError, static_cast<WPARAM>(error), 0); }
 
-    void Restore(Entry& item) noexcept {
+    bool Restore(Entry& item) noexcept {
         try {
             if (auto element = item.element.get()) {
                 // If another customizer took ownership, do not overwrite its value.
-                if (element.Opacity() != 0.0) return;
+                if (element.Opacity() != 0.0) return true;
                 if (item.local == DependencyProperty::UnsetValue()) element.ClearValue(UIElement::OpacityProperty());
                 else element.SetValue(UIElement::OpacityProperty(), item.local);
             }
-        } catch (...) { ReportError(winrt::to_hresult()); }
+            return true;
+        } catch (...) { ReportError(winrt::to_hresult()); return false; }
     }
 
     void Apply(InstanceHandle handle) noexcept {
@@ -102,9 +103,10 @@ class Tap final : public RuntimeClass<RuntimeClassFlags<ClassicCom>, IObjectWith
             return 0;
         }
         if (message == StopMessage) {
-            for (auto& item : self->entries) self->Restore(item);
+            unsigned failures = 0;
+            for (auto& item : self->entries) if (!self->Restore(item)) ++failures;
             self->entries.clear();
-            PostMessageW(self->host, MsgRestored, 0, 0);
+            PostMessageW(self->host, MsgRestored, failures, 0);
             DestroyWindow(wnd);
             return 0;
         }

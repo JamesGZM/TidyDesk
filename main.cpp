@@ -3,6 +3,7 @@
 #include <shellapi.h>
 #include <objbase.h>
 #include <ocidl.h>
+#include <imm.h>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -30,7 +31,7 @@ NOTIFYICONDATAW icon{};
 void Status(const char* state, HRESULT result = S_OK) noexcept {
     try {
         std::ofstream file(folder / L"status.txt", std::ios::trunc);
-        file << "LiteTaskbar 0.2.0 experimental\nstate=" << state
+        file << "LiteTaskbar 0.2.1 experimental\nstate=" << state
              << "\nhost_pid=" << GetCurrentProcessId() << "\nexplorer_pid=" << shellPid
              << "\nbackground_elements=" << changed << "\nhresult=0x" << std::hex
              << static_cast<unsigned long>(result) << '\n';
@@ -48,30 +49,27 @@ void AddTray() {
 }
 DWORD WINAPI Attach(void*) noexcept {
     HRESULT result = E_FAIL;
-    const HRESULT com = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-    HMODULE xaml = LoadLibraryExW(L"Windows.UI.Xaml.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
-    if (xaml) {
-        using Initialize = HRESULT(WINAPI*)(LPCWSTR, DWORD, LPCWSTR, LPCWSTR, CLSID, LPCWSTR);
-        auto address = GetProcAddress(xaml, "InitializeXamlDiagnosticsEx");
-        Initialize initialize = nullptr;
-        static_assert(sizeof(initialize) == sizeof(address));
-        std::memcpy(&initialize, &address, sizeof(initialize));
-        if (initialize) {
-            wchar_t data[96]{};
-            swprintf_s(data, L"%lu:%llu", GetCurrentProcessId(),
-                       static_cast<unsigned long long>(reinterpret_cast<UINT_PTR>(host)));
-            const auto tap = (folder / L"LiteTaskbarTap.dll").wstring();
-            for (unsigned i = 1; i <= 64; ++i) {
-                if (WaitForSingleObject(stopEvent, 0) == WAIT_OBJECT_0) break;
-                wchar_t endpoint[64]{};
-                swprintf_s(endpoint, L"VisualDiagConnection%u", i);
-                result = initialize(endpoint, shellPid, L"", tap.c_str(), TapClsid, data);
-                if (result != HRESULT_FROM_WIN32(ERROR_NOT_FOUND)) break;
+    try {
+        const auto helper = (folder / L"LiteTaskbarAttach.exe").wstring();
+        wchar_t arguments[128]{};
+        swprintf_s(arguments, L" %lu:%llu:%lu", GetCurrentProcessId(),
+                   static_cast<unsigned long long>(reinterpret_cast<UINT_PTR>(host)), shellPid);
+        std::wstring command = L"\"" + helper + L"\"" + arguments;
+        STARTUPINFOW startup{}; startup.cb = sizeof(startup);
+        PROCESS_INFORMATION child{};
+        if (CreateProcessW(helper.c_str(), command.data(), nullptr, nullptr, FALSE,
+                           CREATE_NO_WINDOW, nullptr, folder.c_str(), &startup, &child)) {
+            CloseHandle(child.hThread);
+            if (WaitForSingleObject(child.hProcess, 12000) == WAIT_OBJECT_0) {
+                DWORD code = 0;
+                result = GetExitCodeProcess(child.hProcess, &code) ? static_cast<HRESULT>(code) : E_FAIL;
+            } else {
+                TerminateProcess(child.hProcess, static_cast<UINT>(E_ABORT));
+                result = HRESULT_FROM_WIN32(ERROR_TIMEOUT);
             }
-        } else result = HRESULT_FROM_WIN32(ERROR_PROC_NOT_FOUND);
-        FreeLibrary(xaml);
-    } else result = HRESULT_FROM_WIN32(GetLastError());
-    if (SUCCEEDED(com)) CoUninitialize();
+            CloseHandle(child.hProcess);
+        } else result = HRESULT_FROM_WIN32(GetLastError());
+    } catch (...) { result = E_OUTOFMEMORY; }
     attaching = false;
     PostMessageW(host, AttachResult, static_cast<WPARAM>(result), 0);
     return 0;
@@ -122,7 +120,7 @@ LRESULT CALLBACK WindowProc(HWND wnd, UINT message, WPARAM wparam, LPARAM lparam
     case MsgRestored:
         changed = 0;
         attached = false;
-        Status("restored");
+        Status(wparam ? "restore_failed" : "restored", wparam ? E_FAIL : S_OK);
         if (quitting) DestroyWindow(wnd);
         return 0;
     case AttachResult:
@@ -200,6 +198,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR command, int) {
         return existing ? 0 : 1;
     }
     if (*command) return 2;
+    // A tray-only application has no text input. Avoid loading IME components.
+    ImmDisableIME(GetCurrentThreadId());
     HANDLE singleton = CreateMutexW(nullptr, FALSE, L"Local\\LiteTaskbar.Host.Singleton");
     if (!singleton) return 3;
     if (GetLastError() == ERROR_ALREADY_EXISTS) { CloseHandle(singleton); return 0; }
@@ -207,8 +207,9 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR command, int) {
     const DWORD length = GetModuleFileNameW(nullptr, path, 32768);
     if (!length || length >= 32768) { CloseHandle(singleton); return 4; }
     folder = std::filesystem::path(path).parent_path();
-    if (GetFileAttributesW((folder / L"LiteTaskbarTap.dll").c_str()) == INVALID_FILE_ATTRIBUTES) {
-        MessageBoxW(nullptr, L"请把 LiteTaskbar.exe 和 LiteTaskbarTap.dll 放在同一目录。", L"LiteTaskbar", MB_OK);
+    if (GetFileAttributesW((folder / L"LiteTaskbarTap.dll").c_str()) == INVALID_FILE_ATTRIBUTES ||
+        GetFileAttributesW((folder / L"LiteTaskbarAttach.exe").c_str()) == INVALID_FILE_ATTRIBUTES) {
+        MessageBoxW(nullptr, L"请解压全部文件到同一目录后再运行。", L"LiteTaskbar", MB_OK);
         CloseHandle(singleton); return 5;
     }
     wchar_t eventName[96]{};
