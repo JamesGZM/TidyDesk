@@ -1,0 +1,35 @@
+name: Windows build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure native x64 build
+        run: cmake -S . -B build -A x64
+      - name: Build
+        run: cmake --build build --config Release --parallel 2
+      - name: Test command-line behavior
+        run: ctest --test-dir build -C Release --output-on-failure
+      - name: Package experimental probe
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path package | Out-Null
+          Copy-Item build/Release/LiteTaskbarProbe.exe, LICENSE, README.md -Destination package
+          Get-FileHash package/LiteTaskbarProbe.exe -Algorithm SHA256 | ForEach-Object { "$($_.Hash.ToLower())  LiteTaskbarProbe.exe" } | Set-Content package/SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LiteTaskbar-probe-windows-x64
+          path: package/
+          if-no-files-found: error
+          retention-days: 14
