@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include "desktop_model.h"
 #include <commctrl.h>
+#include <commdlg.h>
 #include <windowsx.h>
 #include <shellapi.h>
 #include <shlobj.h>
@@ -20,6 +21,8 @@ std::vector<std::unique_ptr<Frame>> frames;
 HWND controller=nullptr,desktop=nullptr;
 UINT shellMessage=0;
 bool rebuilding=false;
+unsigned interaction=0; struct Interact { Interact(){++interaction;} ~Interact(){--interaction;} };
+COLORREF Ink(COLORREF c){return GetRValue(c)*299+GetGValue(c)*587+GetBValue(c)*114>145000?RGB(20,30,35):RGB(240,245,248);}
 void Persist();
 struct Frame {
  desk::Box box;HWND window=nullptr,list=nullptr;HIMAGELIST images=nullptr;std::vector<std::wstring> paths;
@@ -48,7 +51,7 @@ public:
  HRESULT STDMETHODCALLTYPE DragOver(DWORD,POINTL,DWORD* effect) override{*effect=accepted?(*effect&(linkOnly?DROPEFFECT_LINK:DROPEFFECT_MOVE)):DROPEFFECT_NONE;return S_OK;}
  HRESULT STDMETHODCALLTYPE DragLeave() override{SetWindowTextW(f->window,f->box.name.c_str());return S_OK;}
  HRESULT STDMETHODCALLTYPE Drop(IDataObject* data,DWORD,POINTL point,DWORD* effect) override{
- auto paths=DropPaths(data);*effect=DROPEFFECT_NONE;bool local=!paths.empty();for(auto& p:paths)if(_wcsicmp(std::filesystem::path(p).parent_path().c_str(),f->box.path.c_str()))local=false;
+ Interact guard;auto paths=DropPaths(data);*effect=DROPEFFECT_NONE;bool local=!paths.empty();for(auto& p:paths)if(_wcsicmp(std::filesystem::path(p).parent_path().c_str(),f->box.path.c_str()))local=false;
  if(local){POINT pos{point.x,point.y};ScreenToClient(f->list,&pos);LVHITTESTINFO hit{};hit.pt=pos;int index=ListView_HitTest(f->list,&hit);if(index<0)index=static_cast<int>(f->paths.size());auto order=f->paths;for(const auto& p:paths){auto it=std::find(order.begin(),order.end(),p);if(it!=order.end())order.erase(it);}index=(std::min)(index,static_cast<int>(order.size()));order.insert(order.begin()+index,paths.begin(),paths.end());f->box.order.clear();for(auto& p:order)f->box.order.push_back(std::filesystem::path(p).filename().wstring());Persist();f->Scan();}
  else{HRESULT hr=desk::Transfer(f->window,paths,f->box.path);if(FAILED(hr)&&hr!=HRESULT_FROM_WIN32(ERROR_CANCELLED)){wchar_t text[160]{};swprintf_s(text,L"操作未完成（0x%08X）。请检查文件权限或占用状态。",static_cast<unsigned>(hr));MessageBoxW(f->window,text,L"TidyDesk",MB_OK|MB_ICONWARNING);}f->Scan();}
  // Operations are performed here, so the source must never delete data again.
@@ -56,11 +59,11 @@ public:
  HRESULT STDMETHODCALLTYPE QueryContinueDrag(BOOL escape,DWORD keys) override{return escape?DRAGDROP_S_CANCEL:!(keys&MK_LBUTTON)?DRAGDROP_S_DROP:S_OK;}
  HRESULT STDMETHODCALLTYPE GiveFeedback(DWORD) override{return DRAGDROP_S_USEDEFAULTCURSORS;}
 };
-void DragOut(Frame* f){std::vector<std::wstring> selected;for(int i=ListView_GetNextItem(f->list,-1,LVNI_SELECTED);i>=0;i=ListView_GetNextItem(f->list,i,LVNI_SELECTED))if(static_cast<size_t>(i)<f->paths.size())selected.push_back(f->paths[static_cast<size_t>(i)]);if(selected.empty())return;
+void DragOut(Frame* f){Interact guard;std::vector<std::wstring> selected;for(int i=ListView_GetNextItem(f->list,-1,LVNI_SELECTED);i>=0;i=ListView_GetNextItem(f->list,i,LVNI_SELECTED))if(static_cast<size_t>(i)<f->paths.size())selected.push_back(f->paths[static_cast<size_t>(i)]);if(selected.empty())return;
  PIDLIST_ABSOLUTE parent=ILCreateFromPathW(f->box.path.c_str());std::vector<PIDLIST_ABSOLUTE> full;std::vector<PCUITEMID_CHILD> children;for(auto& p:selected){auto id=ILCreateFromPathW(p.c_str());if(id){full.push_back(id);children.push_back(ILFindLastID(id));}}
  ComPtr<IDataObject> data;if(parent&&!children.empty()&&SUCCEEDED(SHCreateDataObject(parent,static_cast<UINT>(children.size()),children.data(),nullptr,IID_PPV_ARGS(&data)))){auto source=new DropTarget(f);DWORD effect=0;DoDragDrop(data.Get(),source,DROPEFFECT_MOVE|DROPEFFECT_COPY|DROPEFFECT_LINK,&effect);source->Release();}for(auto p:full)ILFree(p);ILFree(parent);f->Scan();}
-void Menu(Frame* f,POINT p){int selected=ListView_GetNextItem(f->list,-1,LVNI_SELECTED);HMENU menu=CreatePopupMenu();AppendMenuW(menu,MF_STRING,1,L"打开分类文件夹");if(selected>=0){AppendMenuW(menu,MF_STRING,10,L"打开所选项目");AppendMenuW(menu,MF_STRING,11,L"移回桌面");}
- AppendMenuW(menu,MF_STRING,2,f->box.collapsed?L"展开":L"折叠");AppendMenuW(menu,MF_STRING,3,f->box.locked?L"解锁位置":L"锁定位置");AppendMenuW(menu,MF_STRING,4,L"图标：小 / 中 / 大");AppendMenuW(menu,MF_STRING,5,L"背景：浅 / 中 / 深");AppendMenuW(menu,MF_STRING,6,L"移除收纳框（保留文件）");SetForegroundWindow(f->window);int cmd=TrackPopupMenu(menu,TPM_RETURNCMD,p.x,p.y,0,f->window,nullptr);DestroyMenu(menu);
+void Menu(Frame* f,POINT p){Interact guard;int selected=ListView_GetNextItem(f->list,-1,LVNI_SELECTED);HMENU menu=CreatePopupMenu();AppendMenuW(menu,MF_STRING,1,L"打开分类文件夹");if(selected>=0){AppendMenuW(menu,MF_STRING,10,L"打开所选项目");AppendMenuW(menu,MF_STRING,11,L"移回桌面");}
+ AppendMenuW(menu,MF_STRING,2,f->box.collapsed?L"展开":L"折叠");AppendMenuW(menu,MF_STRING,3,f->box.locked?L"解锁位置":L"锁定位置");AppendMenuW(menu,MF_STRING,4,L"图标：小 / 中 / 大");AppendMenuW(menu,MF_STRING,5,L"背景：浅 / 中 / 深");AppendMenuW(menu,MF_STRING,6,L"移除收纳框（保留文件）");AppendMenuW(menu,MF_STRING,7,L"背景颜色…");SetForegroundWindow(f->window);int cmd=TrackPopupMenu(menu,TPM_RETURNCMD,p.x,p.y,0,f->window,nullptr);DestroyMenu(menu);
  if(cmd==1)ShellExecuteW(f->window,L"open",f->box.path.c_str(),nullptr,nullptr,SW_SHOWNORMAL);
  else if(cmd==10&&selected>=0)ShellExecuteW(f->window,L"open",f->paths[static_cast<size_t>(selected)].c_str(),nullptr,nullptr,SW_SHOWNORMAL);
  else if(cmd==11){PWSTR dest=nullptr;if(SUCCEEDED(SHGetKnownFolderPath(FOLDERID_Desktop,0,nullptr,&dest))){std::vector<std::wstring> paths;for(int i=ListView_GetNextItem(f->list,-1,LVNI_SELECTED);i>=0;i=ListView_GetNextItem(f->list,i,LVNI_SELECTED))paths.push_back(f->paths[static_cast<size_t>(i)]);auto hr=desk::Transfer(f->window,paths,dest);CoTaskMemFree(dest);if(FAILED(hr)&&hr!=HRESULT_FROM_WIN32(ERROR_CANCELLED))MessageBoxW(f->window,L"移回桌面未完成。请检查权限或文件占用。",L"TidyDesk",MB_OK);}}
@@ -68,12 +71,12 @@ void Menu(Frame* f,POINT p){int selected=ListView_GetNextItem(f->list,-1,LVNI_SE
  else if(cmd==3){f->box.locked=!f->box.locked;Persist();}
  else if(cmd==4){f->box.size=f->box.size==32?48:f->box.size==48?64:32;Persist();f->Scan();}
  else if(cmd==5){f->box.alpha=f->box.alpha==235?190:f->box.alpha==190?255:235;SetLayeredWindowAttributes(f->window,0,static_cast<BYTE>(f->box.alpha),LWA_ALPHA);Persist();}
- else if(cmd==6){auto boxes=desk::Load();boxes.erase(std::remove_if(boxes.begin(),boxes.end(),[&](const desk::Box& b){return b.id==f->box.id;}),boxes.end());if(desk::Save(boxes))desk::Notify();}}
+ else if(cmd==7){COLORREF custom[16]{};CHOOSECOLORW choose{sizeof(choose)};choose.hwndOwner=f->window;choose.rgbResult=f->box.color;choose.lpCustColors=custom;choose.Flags=CC_FULLOPEN|CC_RGBINIT;if(ChooseColorW(&choose)){f->box.color=choose.rgbResult;ListView_SetBkColor(f->list,f->box.color);ListView_SetTextColor(f->list,Ink(f->box.color));InvalidateRect(f->window,nullptr,TRUE);Persist();}}else if(cmd==6){auto boxes=desk::Load();boxes.erase(std::remove_if(boxes.begin(),boxes.end(),[&](const desk::Box& b){return b.id==f->box.id;}),boxes.end());if(desk::Save(boxes))desk::Notify();}}
 LRESULT CALLBACK ListProc(HWND w,UINT msg,WPARAM wp,LPARAM lp,UINT_PTR,DWORD_PTR data){auto f=reinterpret_cast<Frame*>(data);if(msg==WM_CONTEXTMENU){POINT p{GET_X_LPARAM(lp),GET_Y_LPARAM(lp)};if(p.x==-1)GetCursorPos(&p);Menu(f,p);return 0;}return DefSubclassProc(w,msg,wp,lp);}
 LRESULT CALLBACK FrameProc(HWND w,UINT msg,WPARAM wp,LPARAM lp){auto f=reinterpret_cast<Frame*>(GetWindowLongPtrW(w,GWLP_USERDATA));if(msg==WM_NCCREATE){f=static_cast<Frame*>(reinterpret_cast<CREATESTRUCTW*>(lp)->lpCreateParams);f->window=w;SetWindowLongPtrW(w,GWLP_USERDATA,reinterpret_cast<LONG_PTR>(f));}if(!f)return DefWindowProcW(w,msg,wp,lp);
- switch(msg){case WM_CREATE:{f->list=CreateWindowExW(0,WC_LISTVIEWW,L"分类文件",WS_CHILD|WS_VISIBLE|WS_TABSTOP|LVS_ICON|LVS_AUTOARRANGE|LVS_SHOWSELALWAYS,8,36,f->box.w-16,f->box.h-44,w,reinterpret_cast<HMENU>(1),GetModuleHandleW(nullptr),nullptr);ListView_SetBkColor(f->list,RGB(30,43,51));ListView_SetTextBkColor(f->list,CLR_NONE);ListView_SetTextColor(f->list,RGB(240,245,248));ListView_SetExtendedListViewStyle(f->list,LVS_EX_DOUBLEBUFFER);SetWindowSubclass(f->list,ListProc,1,reinterpret_cast<DWORD_PTR>(f));auto target=new DropTarget(f);RegisterDragDrop(f->list,target);RegisterDragDrop(w,target);target->Release();SetLayeredWindowAttributes(w,0,static_cast<BYTE>(f->box.alpha),LWA_ALPHA);return 0;}
- case WM_ERASEBKGND:{RECT r{};GetClientRect(w,&r);auto brush=CreateSolidBrush(RGB(30,43,51));FillRect(reinterpret_cast<HDC>(wp),&r,brush);DeleteObject(brush);return 1;}
- case WM_PAINT:{PAINTSTRUCT ps{};auto dc=BeginPaint(w,&ps);RECT r{12,6,f->box.w-12,32};SetBkMode(dc,TRANSPARENT);SetTextColor(dc,RGB(210,239,241));auto old=SelectObject(dc,GetStockObject(DEFAULT_GUI_FONT));wchar_t title[256]{};GetWindowTextW(w,title,256);DrawTextW(dc,title,-1,&r,DT_SINGLELINE|DT_VCENTER|DT_END_ELLIPSIS);SelectObject(dc,old);EndPaint(w,&ps);return 0;}
+ switch(msg){case WM_CREATE:{f->list=CreateWindowExW(0,WC_LISTVIEWW,L"分类文件",WS_CHILD|WS_VISIBLE|WS_TABSTOP|LVS_ICON|LVS_AUTOARRANGE|LVS_SHOWSELALWAYS,8,36,f->box.w-16,f->box.h-44,w,reinterpret_cast<HMENU>(1),GetModuleHandleW(nullptr),nullptr);ListView_SetBkColor(f->list,f->box.color);ListView_SetTextBkColor(f->list,CLR_NONE);ListView_SetTextColor(f->list,Ink(f->box.color));ListView_SetExtendedListViewStyle(f->list,LVS_EX_DOUBLEBUFFER);SetWindowSubclass(f->list,ListProc,1,reinterpret_cast<DWORD_PTR>(f));auto target=new DropTarget(f);RegisterDragDrop(f->list,target);RegisterDragDrop(w,target);target->Release();SetLayeredWindowAttributes(w,0,static_cast<BYTE>(f->box.alpha),LWA_ALPHA);return 0;}
+ case WM_ERASEBKGND:{RECT r{};GetClientRect(w,&r);auto brush=CreateSolidBrush(f->box.color);FillRect(reinterpret_cast<HDC>(wp),&r,brush);DeleteObject(brush);return 1;}
+ case WM_PAINT:{PAINTSTRUCT ps{};auto dc=BeginPaint(w,&ps);RECT r{12,6,f->box.w-12,32};SetBkMode(dc,TRANSPARENT);SetTextColor(dc,Ink(f->box.color));auto old=SelectObject(dc,GetStockObject(DEFAULT_GUI_FONT));wchar_t title[256]{};GetWindowTextW(w,title,256);DrawTextW(dc,title,-1,&r,DT_SINGLELINE|DT_VCENTER|DT_END_ELLIPSIS);SelectObject(dc,old);EndPaint(w,&ps);return 0;}
  case WM_SETTEXT:{auto ret=DefWindowProcW(w,msg,wp,lp);InvalidateRect(w,nullptr,TRUE);return ret;}
  case WM_NCHITTEST:{POINT p{GET_X_LPARAM(lp),GET_Y_LPARAM(lp)};ScreenToClient(w,&p);RECT r{};GetClientRect(w,&r);if(!f->box.locked){if(!f->box.collapsed&&p.x>r.right-14&&p.y>r.bottom-14)return HTBOTTOMRIGHT;if(p.y<34)return HTCAPTION;}return HTCLIENT;}
  case WM_GETMINMAXINFO:{auto info=reinterpret_cast<MINMAXINFO*>(lp);info->ptMinTrackSize={220,f->box.collapsed?40:120};return 0;}
@@ -91,7 +94,7 @@ LRESULT CALLBACK FrameProc(HWND w,UINT msg,WPARAM wp,LPARAM lp){auto f=reinterpr
  case WM_DESTROY:RevokeDragDrop(f->list);RevokeDragDrop(w);return 0;
  }return DefWindowProcW(w,msg,wp,lp);}
 BOOL CALLBACK FindDesktop(HWND w,LPARAM p){if(FindWindowExW(w,nullptr,L"SHELLDLL_DefView",nullptr)){*reinterpret_cast<HWND*>(p)=w;return FALSE;}return TRUE;}
-void Rebuild(){rebuilding=true;frames.clear();desktop=nullptr;EnumWindows(FindDesktop,reinterpret_cast<LPARAM>(&desktop));if(!desktop){rebuilding=false;return;}
+void Rebuild(){if(interaction){SetTimer(controller,1,250,nullptr);return;}rebuilding=true;frames.clear();desktop=nullptr;EnumWindows(FindDesktop,reinterpret_cast<LPARAM>(&desktop));if(!desktop){rebuilding=false;return;}
  for(auto& box:desk::Load()){auto f=std::make_unique<Frame>();f->box=box;RECT r{box.x,box.y,box.x+box.w,box.y+box.h};MONITORINFO monitor{sizeof(monitor)};GetMonitorInfoW(MonitorFromRect(&r,MONITOR_DEFAULTTONEAREST),&monitor);f->box.x=static_cast<int>(std::clamp<LONG>(box.x,monitor.rcWork.left,(std::max)(monitor.rcWork.left,monitor.rcWork.right-box.w)));f->box.y=static_cast<int>(std::clamp<LONG>(box.y,monitor.rcWork.top,(std::max)(monitor.rcWork.top,monitor.rcWork.bottom-box.h)));POINT p{f->box.x,f->box.y};ScreenToClient(desktop,&p);
  CreateWindowExW(WS_EX_TOOLWINDOW|WS_EX_LAYERED,L"TidyDesk.Desktop.Frame",box.name.c_str(),WS_CHILD|WS_VISIBLE|WS_CLIPCHILDREN,p.x,p.y,box.w,box.collapsed?40:box.h,desktop,nullptr,GetModuleHandleW(nullptr),f.get());if(f->window){f->Scan();f->Watch();frames.push_back(std::move(f));}}
  rebuilding=false;}

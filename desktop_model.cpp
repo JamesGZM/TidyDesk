@@ -4,6 +4,7 @@
 #include <shlobj.h>
 #include <wrl/client.h>
 #include <fstream>
+#include <cstdio>
 #include <algorithm>
 using Microsoft::WRL::ComPtr;
 namespace desk {
@@ -23,7 +24,7 @@ std::vector<Box> Load() {
  b.id=Read(f,s,L"Id");b.name=Read(f,s,L"Name");b.path=Read(f,s,L"Path"); if(b.id.empty()||b.path.empty())continue;
  b.x=Number(f,s,L"X",40); b.y=Number(f,s,L"Y",60); b.w=std::clamp(Number(f,s,L"W",360),220,2400); b.h=std::clamp(Number(f,s,L"H",300),100,1800);
  b.alpha=static_cast<unsigned>(std::clamp(Number(f,s,L"Alpha",235),80,255));b.size=static_cast<unsigned>(std::clamp(Number(f,s,L"Size",48),24,96));
- b.collapsed=Number(f,s,L"Collapsed",0)!=0;b.locked=Number(f,s,L"Locked",0)!=0;
+ b.color=static_cast<DWORD>(Number(f,s,L"Color",RGB(30,43,51)))&0xffffff;b.collapsed=Number(f,s,L"Collapsed",0)!=0;b.locked=Number(f,s,L"Locked",0)!=0;
  for(int n=0;n<std::clamp(Number(f,s,L"OrderCount",0),0,10000);++n)b.order.push_back(Read(f,s,(L"Order"+std::to_wstring(n)).c_str()));
  boxes.push_back(std::move(b)); } return boxes;
 }
@@ -35,7 +36,7 @@ bool Save(const std::vector<Box>& boxes) {
  put(L"Layout",L"Version",L"1");put(L"Layout",L"Count",std::to_wstring(boxes.size()));
  for(size_t i=0;i<boxes.size();++i){const auto& b=boxes[i];auto s=L"Box"+std::to_wstring(i);put(s,L"Id",b.id);put(s,L"Name",b.name);put(s,L"Path",b.path);
  put(s,L"X",std::to_wstring(b.x));put(s,L"Y",std::to_wstring(b.y));put(s,L"W",std::to_wstring(b.w));put(s,L"H",std::to_wstring(b.h));put(s,L"Alpha",std::to_wstring(b.alpha));put(s,L"Size",std::to_wstring(b.size));put(s,L"Collapsed",b.collapsed?L"1":L"0");put(s,L"Locked",b.locked?L"1":L"0");
- put(s,L"OrderCount",std::to_wstring(b.order.size()));for(size_t j=0;j<b.order.size();++j)put(s,(L"Order"+std::to_wstring(j)).c_str(),b.order[j]);}
+ put(s,L"Color",std::to_wstring(b.color));put(s,L"OrderCount",std::to_wstring(b.order.size()));for(size_t j=0;j<b.order.size();++j)put(s,(L"Order"+std::to_wstring(j)).c_str(),b.order[j]);}
  WritePrivateProfileStringW(nullptr,nullptr,nullptr,temp.c_str());if(!ok)return false;
  if(std::filesystem::exists(dest))return ReplaceFileW(dest.c_str(),temp.c_str(),bak.c_str(),0,nullptr,nullptr)!=FALSE;
  return MoveFileExW(temp.c_str(),dest.c_str(),MOVEFILE_WRITE_THROUGH)!=FALSE;
@@ -65,5 +66,5 @@ HRESULT Transfer(HWND owner,const std::vector<std::wstring>& paths,const std::ws
  hr=op->PerformOperations();BOOL aborted=FALSE;op->GetAnyOperationsAborted(&aborted);return aborted?HRESULT_FROM_WIN32(ERROR_CANCELLED):hr;
 }
 int ModelTest(){wchar_t temp[MAX_PATH]{};GetTempPathW(MAX_PATH,temp);testRoot=std::filesystem::path(temp)/(L"TidyDesk-test-"+std::to_wstring(GetCurrentProcessId()));Box b;b.id=L"test";b.name=L"中文分类";b.path=L"C:\\测试 文件";b.order={L"示例.txt"};if(!Save({b}))return 1;auto v=Load();if(v.size()!=1||v[0].name!=b.name||v[0].order!=b.order)return 2;b.name=L"Changed";if(!Save({b}))return 3;{std::ofstream f(testRoot/L"layout.ini");f<<"broken";}v=Load();if(v.size()!=1||v[0].name!=L"中文分类")return 4;std::filesystem::remove_all(testRoot);testRoot.clear();return 0;}
-int TransferTest(){wchar_t temp[MAX_PATH]{};GetTempPathW(MAX_PATH,temp);auto root=std::filesystem::path(temp)/(L"TidyDesk-transfer-"+std::to_wstring(GetCurrentProcessId()));auto a=root/L"原始",b=root/L"分类";std::filesystem::create_directories(a);std::filesystem::create_directories(b);auto file=a/L"工作 文件.txt",exe=a/L"软件.exe";{std::ofstream f(file);f<<"test payload";}{std::ofstream f(exe);f<<"not executable; shortcut test only";}CoInitializeEx(nullptr,COINIT_APARTMENTTHREADED);auto hr=Transfer(nullptr,{file.wstring(),exe.wstring()},b.wstring());if(FAILED(hr))return 10;if(std::filesystem::exists(file)||!std::filesystem::exists(b/file.filename())||!std::filesystem::exists(exe)||!std::filesystem::exists(b/L"软件.lnk"))return 11;ComPtr<IShellLinkW> link;CoCreateInstance(CLSID_ShellLink,nullptr,CLSCTX_INPROC_SERVER,IID_PPV_ARGS(&link));ComPtr<IPersistFile> persist;link.As(&persist);persist->Load((b/L"软件.lnk").c_str(),STGM_READ);wchar_t target[32768]{};link->GetPath(target,32768,nullptr,SLGP_RAWPATH);if(exe.wstring()!=target)return 12;persist.Reset();link.Reset();CoUninitialize();std::filesystem::remove_all(root);return 0;}
+int TransferTest(){wchar_t temp[MAX_PATH]{};GetTempPathW(MAX_PATH,temp);auto root=std::filesystem::path(temp)/(L"TidyDesk-transfer-"+std::to_wstring(GetCurrentProcessId()));auto a=root/L"原始",b=root/L"分类";std::filesystem::create_directories(a);std::filesystem::create_directories(b);auto file=a/L"工作 文件.txt",exe=a/L"软件.exe";{std::ofstream f(file);f<<"test payload";}{std::ofstream f(exe);f<<"not executable; shortcut test only";}CoInitializeEx(nullptr,COINIT_APARTMENTTHREADED);auto hr=Transfer(nullptr,{file.wstring(),exe.wstring()},b.wstring());if(FAILED(hr)){std::printf("Transfer failed: 0x%08lx\n",static_cast<unsigned long>(hr));return 10;}if(std::filesystem::exists(file)||!std::filesystem::exists(b/file.filename())||!std::filesystem::exists(exe)||!std::filesystem::exists(b/L"软件.lnk")){std::printf("Move/shortcut existence invariant failed\n");return 11;}ComPtr<IShellLinkW> link;CoCreateInstance(CLSID_ShellLink,nullptr,CLSCTX_INPROC_SERVER,IID_PPV_ARGS(&link));ComPtr<IPersistFile> persist;link.As(&persist);persist->Load((b/L"软件.lnk").c_str(),STGM_READ);wchar_t target[32768]{};link->GetPath(target,32768,nullptr,SLGP_RAWPATH);if(_wcsicmp(exe.c_str(),target)!=0){std::printf("Shortcut target mismatch\n");return 12;}persist.Reset();link.Reset();CoUninitialize();std::filesystem::remove_all(root);return 0;}
 }

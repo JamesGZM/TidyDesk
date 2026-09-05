@@ -5,7 +5,7 @@
 #include <string>
 #include <vector>
 namespace desk {
-struct Box { std::wstring id, name, path; int x=40,y=60,w=360,h=300; unsigned alpha=235, size=48; bool collapsed=false, locked=false; std::vector<std::wstring> order; };
+struct Box { std::wstring id, name, path; int x=40,y=60,w=360,h=300; unsigned alpha=235, size=48; DWORD color=RGB(30,43,51); bool collapsed=false, locked=false; std::vector<std::wstring> order; };
 std::filesystem::path DataDir();
 std::filesystem::path CollectionsDir();
 std::vector<Box> Load();
