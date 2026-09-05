@@ -84,6 +84,10 @@ void Build() {
 }
 LRESULT CALLBACK Proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
+    case WM_CTLCOLORSTATIC:
+    case WM_CTLCOLORBTN:
+        SetBkMode(reinterpret_cast<HDC>(wp), TRANSPARENT);
+        return reinterpret_cast<LRESULT>(GetSysColorBrush(COLOR_WINDOW));
     case WM_CREATE: page = wnd; Build(); return 0;
     case WM_HSCROLL: draft.opacity = static_cast<unsigned>(SendDlgItemMessageW(wnd, 12, TBM_GETPOS, 0, 0)); Label(); SetDlgItemTextW(wnd, 15, L"点击“应用”保存更改"); return 0;
     case WM_COMMAND:
