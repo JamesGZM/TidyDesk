@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(TidyDesk VERSION 0.4.11 LANGUAGES CXX RC)
+project(TidyDesk VERSION 0.4.12 LANGUAGES CXX RC)
 if(NOT WIN32)
   message(FATAL_ERROR "TidyDesk requires Windows")
 endif()
@@ -65,3 +65,5 @@ set_tests_properties(retired-bootstrap-rejected PROPERTIES WILL_FAIL TRUE)
 add_test(NAME collection-reorder COMMAND TidyDeskDesktop --test-order)
 
 add_test(NAME collection-focus COMMAND TidyDeskDesktop --test-focus)
+
+add_test(NAME arrow-setting-command-and-backup COMMAND TidyDeskIcons --test-arrow-setting)

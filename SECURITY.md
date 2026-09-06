@@ -20,3 +20,7 @@
 ## 检查
 
 CI 检查提权及服务引导 API 不存在、旧安装命令被拒绝、测试助手不进入最终包。源代码及构建检查不替代用户电脑上的旧服务清理；不会根据 CI 结果声称真实 UAC 交互已验证。
+
+## 0.4.12 bounded system operation
+
+Arrow settings now invoke OS-protected System32/reg.exe directly with a fixed Shell Icons/29 operation and explicit UAC per change. No unsigned TidyDesk helper, script host, or service bootstrap is elevated. The icon is data in a stable user data directory. Source guards check this boundary; they are not code signing or pre-elevation authentication of the main application. See PERMISSIONS.md for backups, concurrency limits, and cache behavior.

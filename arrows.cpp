@@ -1,3 +1,4 @@
+#include "arrow_control.h"
 // SPDX-License-Identifier: MIT
 #include <windows.h>
 #include <shellapi.h>
@@ -28,6 +29,7 @@ LSTATUS Apply(bool restore){HKEY shell=nullptr,backup=nullptr;auto code=RegCreat
  code=work();RegCloseKey(backup);RegCloseKey(shell);return code;}
 }
 int WINAPI wWinMain(HINSTANCE,HINSTANCE,PWSTR command,int){
+ if(wcscmp(command,L"--test-arrow-setting")==0)return arrows::Test();
  // This executable is now a test target only and is excluded from every package.
  if(wcscmp(command,L"--test-permissions")==0){return permission::Call(permission::Operation::Hide)==ERROR_NOT_SUPPORTED&&permission::Call(permission::Operation::Ping)==ERROR_NOT_SUPPORTED?0:1;}
  if(wcscmp(command,L"--test-overlay")==0){auto p=std::filesystem::temp_directory_path()/(L"TidyDesk-overlay-"+std::to_wstring(GetCurrentProcessId())+L".ico");bool ok=overlay::Write(p)&&overlay::Verify(p);std::error_code ec;std::filesystem::remove(p,ec);return ok?0:20;}if(wcscmp(command,L"--test-backup")==0){
