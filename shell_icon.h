@@ -2,6 +2,7 @@
 #pragma once
 #include "icon_pixels.h"
 #include <shlobj.h>
+#include <shellapi.h>
 #include <wrl/client.h>
 #include <filesystem>
 #include <fstream>

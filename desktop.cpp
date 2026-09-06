@@ -66,7 +66,7 @@ void Paint(Frame* f){if(!f->window||!IsWindow(f->window))return;RECT r{};GetClie
  HDC screen=GetDC(nullptr),dc=CreateCompatibleDC(screen);BITMAPINFO info{};info.bmiHeader.biSize=sizeof(BITMAPINFOHEADER);info.bmiHeader.biWidth=width;info.bmiHeader.biHeight=-height;info.bmiHeader.biPlanes=1;info.bmiHeader.biBitCount=32;info.bmiHeader.biCompression=BI_RGB;void* pixels=nullptr;
  HBITMAP dib=CreateDIBSection(screen,&info,DIB_RGB_COLORS,&pixels,nullptr,0);if(!dib){DeleteDC(dc);ReleaseDC(nullptr,screen);return;}auto old=SelectObject(dc,dib);
  {Bitmap bitmap(width,height,width*4,PixelFormat32bppPARGB,static_cast<BYTE*>(pixels));Graphics g(&bitmap);g.Clear(Color(1,0,0,0));g.SetSmoothingMode(SmoothingModeAntiAlias);g.SetTextRenderingHint(TextRenderingHintAntiAliasGridFit);
-  REAL scale=static_cast<REAL>(f->D(100))/100.0f;GraphicsPath border;Rounded(border,3*scale,13*scale,static_cast<REAL>(width)-6*scale,static_cast<REAL>(height)-16*scale,16*scale);
+  REAL scale=static_cast<REAL>(f->D(100))/100.0f;GraphicsPath border;REAL inset=(f->large?13:3)*scale;Rounded(border,inset,13*scale,static_cast<REAL>(width)-2*inset,static_cast<REAL>(height)-13*scale-inset,16*scale);
   // A 1/255 alpha hit surface keeps empty space droppable without an opaque panel.
   SolidBrush hit(Color(1,0,0,0));g.FillPath(&hit,&border);
   REAL titleWidth=(std::min)(static_cast<REAL>(width)-110*scale,static_cast<REAL>(f->box.name.size())*17*scale+24*scale);
