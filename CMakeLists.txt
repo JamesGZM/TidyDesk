@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(TidyDesk VERSION 0.4.6 LANGUAGES CXX RC)
+project(TidyDesk VERSION 0.4.7 LANGUAGES CXX RC)
 if(NOT WIN32)
   message(FATAL_ERROR "TidyDesk requires Windows")
 endif()
@@ -56,3 +56,4 @@ add_test(NAME desktop-icon-color-alpha COMMAND TidyDeskDesktop --test-icon-pixel
 add_test(NAME explicit-settings-apply COMMAND TidyDesk --test-settings)
 set_tests_properties(explicit-settings-apply PROPERTIES TIMEOUT 30)
 add_test(NAME shortcut-source-icon COMMAND TidyDeskDesktop --test-shortcut-icon)
+add_test(NAME collection-folder-rename COMMAND TidyDeskDesktop --test-rename)

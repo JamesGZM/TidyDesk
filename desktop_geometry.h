@@ -3,11 +3,11 @@
 #include <algorithm>
 namespace desk {
 struct Grid {
- int columns, rows, cellWidth, cellHeight, top=48, left=32;
+ int columns, rows, cellWidth, cellHeight, top=48, left=18;
  static Grid Make(int width,int height,int icon) {
   int cw=std::max(92,icon+44), ch=icon+48;
-  int columns=std::max(1,(width-64)/cw);
-  return {columns,std::max(1,(height-80)/ch),cw,ch,48,std::max(32,(width-columns*cw)/2)};
+  int columns=std::max(1,(width-36)/cw);
+  return {columns,std::max(1,(height-66)/ch),cw,ch,48,18};
  }
  int ItemHit(int x,int y,int scroll,int count,int icon) const {
   int index=Hit(x,y,scroll,count);if(index<0)return -1;
@@ -32,7 +32,7 @@ inline int GeometryTest() {
  if(large.MaxScroll(100)>=small.MaxScroll(100)||small.MaxScroll(0)!=0)return 4;
  if(small.Hit(small.left,48,0,0)!=-1)return 5;
  if(small.ItemHit(small.left,48,0,100,48)!=-1||small.ItemHit(small.left+small.cellWidth/2,48,0,100,48)!=0)return 6;
- if(small.left<32||large.left<32||small.top!=48)return 7;
+ if(small.left!=18||large.left!=18||Grid::Make(220,220,48).columns!=2)return 7;
  return 0;
 }
 }

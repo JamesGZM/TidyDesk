@@ -1,5 +1,5 @@
 ; SPDX-License-Identifier: MIT
-#define AppVersion "0.4.6"
+#define AppVersion "0.4.7"
 [Setup]
 AppId={{F33B8E61-F180-40F4-9377-455BBBCE67A1}
 AppName=TidyDesk

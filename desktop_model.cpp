@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <algorithm>
 #include <commctrl.h>
+#include <cwctype>
 using Microsoft::WRL::ComPtr;
 namespace desk {
 namespace {
@@ -47,6 +48,18 @@ bool Save(const std::vector<Box>& boxes) {
  }catch(...){return false;}
 }
 void Notify(){if(auto w=FindWindowW(L"TidyDesk.Desktop.Controller",nullptr))PostMessageW(w,WM_APP+1,0,0);}
+bool RenameBox(const std::wstring& id,const std::wstring& name,std::wstring& error){
+ if(name.empty()||name.size()>80||name.back()==L'.'||name.back()==L' '||name.front()==L' '||name.find_first_of(L"<>:\"/\\|?*\r\n\t")!=std::wstring::npos){error=L"名称不能为空，不能包含路径符号或首尾空格。";return false;}
+ auto stem=name.substr(0,name.find(L'.'));std::transform(stem.begin(),stem.end(),stem.begin(),[](wchar_t c){return static_cast<wchar_t>(towupper(c));});if(stem==L"CON"||stem==L"PRN"||stem==L"AUX"||stem==L"NUL"||(stem.size()==4&&(stem.substr(0,3)==L"COM"||stem.substr(0,3)==L"LPT")&&stem[3]>=L'1'&&stem[3]<=L'9')){error=L"不能使用 Windows 保留名称。";return false;}
+ HANDLE mutex=CreateMutexW(nullptr,FALSE,L"Local\\TidyDesk.Layout.Writer");if(!mutex){error=L"无法锁定布局。";return false;}auto acquired=WaitForSingleObject(mutex,3000);if(acquired!=WAIT_OBJECT_0&&acquired!=WAIT_ABANDONED){CloseHandle(mutex);error=L"布局正在修改，请稍后重试。";return false;}struct Unlock{HANDLE h;~Unlock(){ReleaseMutex(h);CloseHandle(h);}} unlock{mutex};
+ try{auto boxes=Load();auto found=std::find_if(boxes.begin(),boxes.end(),[&](const Box& box){return box.id==id;});if(found==boxes.end()){error=L"收纳框已不存在，请刷新列表。";return false;}for(const auto& box:boxes)if(box.id!=id&&_wcsicmp(box.name.c_str(),name.c_str())==0){error=L"已有同名收纳框，请换一个名称。";return false;}
+ auto old=std::filesystem::path(found->path),next=old.parent_path()/name;if(old==next&&found->name==name)return true;
+ if(old==old.root_path()||old==Known(FOLDERID_Desktop)||old==Known(FOLDERID_Documents)){error=L"不能重命名系统桌面或文档根目录。";return false;}
+ bool moved=old!=next;if(moved&&!MoveFileExW(old.c_str(),next.c_str(),MOVEFILE_WRITE_THROUGH)){error=L"文件夹重命名失败：目标已存在、文件夹被占用或权限不足。";return false;}
+ found->name=name;found->path=next.wstring();if(!Save(boxes)){if(moved&&!MoveFileExW(next.c_str(),old.c_str(),MOVEFILE_WRITE_THROUGH))error=L"布局保存失败，文件夹位于："+next.wstring();else error=L"布局保存失败，已还原文件夹名称。";return false;}Notify();return true;
+ }catch(...){error=L"重命名未完成，请检查文件夹是否存在。";return false;}
+}
+int RenameTest(){auto root=std::filesystem::temp_directory_path()/(L"TidyDesk-rename-"+std::to_wstring(GetCurrentProcessId()));testRoot=root/L"state";auto folder=root/L"原始";std::filesystem::create_directories(folder);{std::ofstream f(folder/L"保留.txt");f<<"preserved";}Box a;a.id=L"a";a.name=L"原始";a.path=folder.wstring();Box b;b.id=L"b";b.name=L"Other";b.path=(root/L"other").wstring();int result=0;std::wstring error;if(!Save({a,b})||!RenameBox(a.id,L"已重命名",error))result=1;else{auto current=Load();if(current[0].name!=L"已重命名"||!std::filesystem::exists(root/L"已重命名"/L"保留.txt")||std::filesystem::exists(folder))result=2;if(RenameBox(a.id,L"other",error)||RenameBox(a.id,L"bad/name",error))result=3;std::filesystem::create_directory(root/L"occupied");if(RenameBox(a.id,L"occupied",error)||!std::filesystem::exists(root/L"已重命名"/L"保留.txt"))result=4;}testRoot.clear();std::filesystem::remove_all(root);return result;}
 HRESULT MoveOutAndRemove(HWND owner,const std::wstring& folder,const std::wstring& destination){try{std::error_code ec;bool exists=std::filesystem::exists(folder,ec);if(ec)return E_ACCESSDENIED;if(!exists)return S_OK;if(std::filesystem::equivalent(folder,destination,ec))return E_INVALIDARG;ec.clear();std::vector<std::wstring> files;for(auto& entry:std::filesystem::directory_iterator(folder,ec))files.push_back(entry.path().wstring());if(ec)return E_ACCESSDENIED;if(!files.empty()){auto hr=Transfer(owner,files,destination,false);if(FAILED(hr))return hr;}std::filesystem::remove(folder,ec);return ec?HRESULT_FROM_WIN32(ERROR_DIR_NOT_EMPTY):S_OK;}catch(...){return E_FAIL;}}
 bool Dissolve(HWND owner,const std::wstring& id){auto boxes=Load();auto found=std::find_if(boxes.begin(),boxes.end(),[&](const Box& b){return b.id==id;});if(found==boxes.end())return false;
  const auto folder=found->path;auto prompt=L"解散“"+found->name+L"”？\n\n内容将移回桌面，随后删除对应的空文件夹。\n"+folder;
@@ -64,8 +77,8 @@ bool NewBox(HWND owner,bool existing){
  DWORD flags=0;picker->GetOptions(&flags);picker->SetOptions(flags|FOS_PICKFOLDERS|FOS_FORCEFILESYSTEM);picker->SetTitle(existing?L"选择要显示的分类文件夹":L"选择或新建一个分类文件夹（右键 → 新建文件夹）");
  if(!existing){std::error_code ec;std::filesystem::create_directories(CollectionsDir(),ec);ComPtr<IShellItem> root;if(SUCCEEDED(SHCreateItemFromParsingName(CollectionsDir().c_str(),nullptr,IID_PPV_ARGS(&root))))picker->SetFolder(root.Get());}
  if(SUCCEEDED(picker->Show(owner))){ComPtr<IShellItem> item;PWSTR p=nullptr;if(SUCCEEDED(picker->GetResult(&item))&&SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH,&p))){auto boxes=Load();Box b;b.path=p;CoTaskMemFree(p);b.name=std::filesystem::path(b.path).filename().wstring();GUID id{};CoCreateGuid(&id);wchar_t guid[40]{};StringFromGUID2(id,guid,40);b.id=guid;b.x+=static_cast<int>(boxes.size()%6)*30;b.y+=static_cast<int>(boxes.size()%6)*30;
- bool duplicate=false;for(const auto& old:boxes)if(_wcsicmp(old.path.c_str(),b.path.c_str())==0)duplicate=true;
- if(!duplicate&&boxes.size()<64){boxes.push_back(b);result=Save(boxes);if(result)Notify();}else MessageBoxW(owner,L"这个文件夹已经有收纳框，或已达到 64 个框的上限。",L"TidyDesk",MB_OK);}}}}
+ bool duplicate=false;for(const auto& old:boxes)if(_wcsicmp(old.path.c_str(),b.path.c_str())==0||_wcsicmp(old.name.c_str(),b.name.c_str())==0)duplicate=true;
+ if(!duplicate&&boxes.size()<64){boxes.push_back(b);result=Save(boxes);if(result)Notify();}else MessageBoxW(owner,L"已存在同名收纳框、文件夹已绑定，或已达到 64 个框的上限。",L"TidyDesk",MB_OK);}}}}
  if(SUCCEEDED(com))CoUninitialize();return result;
 }
 HRESULT Transfer(HWND owner,const std::vector<std::wstring>& paths,const std::wstring& destination,bool executableLinks){
