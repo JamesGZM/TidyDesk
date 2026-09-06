@@ -17,6 +17,12 @@ struct Grid {
   return onIcon||onLabel?index:-1;
  }
  int MaxScroll(int count) const {return std::max(0,(count+columns-1)/columns-rows);}
+ int Insertion(int x,int y,int scroll,int count)const{
+  if(y<top)return std::clamp(scroll*columns,0,count);
+  int row=std::clamp((y-top)/cellHeight,0,rows-1),offset=std::max(0,x-left);
+  int boundary=std::clamp((offset+cellWidth/2)/cellWidth,0,columns);
+  return std::clamp((row+scroll)*columns+boundary,0,count);
+ }
  int Hit(int x,int y,int scroll,int count) const {
   if(x<left||y<top)return -1;
   int col=(x-left)/cellWidth,row=(y-top)/cellHeight;

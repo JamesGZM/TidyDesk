@@ -2,6 +2,8 @@
 #include "desktop_model.h"
 #include "desktop_geometry.h"
 #include "desktop_animation.h"
+#include "desktop_order.h"
+#include <unordered_map>
 #include "shell_icon.h"
 #include <commctrl.h>
 #include <windowsx.h>
@@ -25,12 +27,13 @@ struct Batch {std::vector<Item> items;};
 struct Frame;
 std::vector<std::unique_ptr<Frame>> frames;
 HWND controller=nullptr,desktop=nullptr,shade=nullptr;
-Frame* expanded=nullptr;
+Frame* expanded=nullptr;Frame* dragSource=nullptr;
 UINT shellMessage=0;
 bool rebuilding=false;
 unsigned interaction=0;
 struct Interact {Interact(){++interaction;}~Interact(){--interaction;}};
 void Paint(Frame* f);
+std::vector<std::wstring> Selected(Frame* f);
 void Expand(Frame* f,bool value,bool animate=true);
 void Persist();
 void Rebuild();
@@ -50,6 +53,7 @@ struct Frame {
  double Inset()const{return animating?fromInset+((large?13.0:3.0)-fromInset)*animationProgress:(large?13.0:3.0);}
  double ShadeOpacity()const{return animating?fromShade+((large?60.0:0.0)-fromShade)*animationProgress:(large?60.0:0.0);}
 
+ int dropSlot=-1;bool internalDrop=false;ULONGLONG lastDragScroll=0;
  POINT press{};RECT saved{};ULONGLONG entered=0;int wheel=0;
  ComPtr<IContextMenu2> menu2;ComPtr<IContextMenu3> menu3;
  HANDLE cancel=CreateEventW(nullptr,TRUE,FALSE,nullptr);std::thread watcher,loader;std::atomic<bool> busy{false};bool again=false;
@@ -100,6 +104,8 @@ void Paint(Frame* f){if(!f->window||!IsWindow(f->window))return;RECT r{};GetClie
   if(f->hover||f->large||f->animating||f->box.collapsed){RECT b=f->Button();POINT cursor{};GetCursorPos(&cursor);ScreenToClient(f->window,&cursor);if(PtInRect(&b,cursor)){GraphicsPath button;Rounded(button,static_cast<REAL>(b.left),static_cast<REAL>(b.top),static_cast<REAL>(b.right-b.left),static_cast<REAL>(b.bottom-b.top),6*scale);SolidBrush fill(Color(40,240,245,250));g.FillPath(&fill,&button);}Text(g,f->large?L"\xE73F":L"\xE740",RectF(static_cast<REAL>(b.left),static_cast<REAL>(b.top),static_cast<REAL>(b.right-b.left),static_cast<REAL>(b.bottom-b.top)),16*scale,true);}
   if(f->animating&&f->contentFrom&&f->contentTo){auto state=g.Save();g.SetClip(Rect(8,f->D(46),width-16,(std::max)(1,height-f->D(54))));DrawCached(g,f->contentFrom.get(),1.0-f->animationProgress);DrawCached(g,f->contentTo.get(),f->animationProgress);g.Restore(state);}else DrawItems(g,f,width,height);
 
+  if(f->dropSlot>=0&&!f->animating){auto grid=f->Grid();int row=f->dropSlot/grid.columns-f->scroll,col=f->dropSlot%grid.columns;if(col==0&&f->dropSlot>f->scroll*grid.columns){--row;col=grid.columns;}if(row>=0&&row<grid.rows){REAL x=static_cast<REAL>(std::clamp(grid.left+col*grid.cellWidth-f->D(3),f->D(8),width-f->D(8))),y=static_cast<REAL>(grid.top+row*grid.cellHeight+f->D(3));Pen marker(Color(240,67,220,211),2*scale);marker.SetStartCap(LineCapRound);marker.SetEndCap(LineCapRound);g.DrawLine(&marker,x,y,x,y+static_cast<REAL>(grid.cellHeight-f->D(10)));}}
+
  }
  f->hitSurface=true;if(!f->animating)for(size_t pixel=0;pixel<static_cast<size_t>(width)*height;++pixel)if((static_cast<DWORD*>(pixels)[pixel]>>24)==0){f->hitSurface=false;break;}
  POINT origin{};SIZE size{width,height};BLENDFUNCTION blend{AC_SRC_OVER,0,255,AC_SRC_ALPHA};f->painted=UpdateLayeredWindow(f->window,screen,nullptr,&size,dc,&origin,0,&blend,ULW_ALPHA)!=FALSE;ReleaseDC(nullptr,screen);
@@ -126,27 +132,37 @@ void Expand(Frame* f,bool value,bool animate){if(value==f->large){if(!animate&&f
 }
 std::vector<std::wstring> DropPaths(IDataObject* data){std::vector<std::wstring> paths;FORMATETC fmt{CF_HDROP,nullptr,DVASPECT_CONTENT,-1,TYMED_HGLOBAL};STGMEDIUM medium{};if(SUCCEEDED(data->GetData(&fmt,&medium))){auto drop=static_cast<HDROP>(medium.hGlobal);UINT count=DragQueryFileW(drop,0xffffffff,nullptr,0);for(UINT i=0;i<count;++i){UINT len=DragQueryFileW(drop,i,nullptr,0);std::wstring p(len+1,L'\0');DragQueryFileW(drop,i,p.data(),len+1);p.resize(len);paths.push_back(p);}ReleaseStgMedium(&medium);}return paths;}
 void Failure(HWND w,HRESULT hr){if(FAILED(hr)&&hr!=HRESULT_FROM_WIN32(ERROR_CANCELLED)){wchar_t text[160]{};swprintf_s(text,L"操作未完成（0x%08X）。文件未被静默覆盖。",static_cast<unsigned>(hr));MessageBoxW(w,text,L"TidyDesk",MB_OK|MB_ICONWARNING);}}
+bool ReorderFrame(Frame* f,const std::vector<std::wstring>& paths,int slot){
+ std::vector<std::wstring> current,moving;for(const auto& item:f->content->items)current.push_back(item.name);
+ for(const auto& path:paths){auto found=std::find_if(f->content->items.begin(),f->content->items.end(),[&](const Item& item){return _wcsicmp(item.path.c_str(),path.c_str())==0;});if(found==f->content->items.end()||std::find(moving.begin(),moving.end(),found->name)!=moving.end())return false;moving.push_back(found->name);}
+ auto order=desk::Reordered(current,moving,slot);if(order==current)return true;if(!desk::SaveOrder(f->box.id,order))return false;
+ auto selected=Selected(f);f->box.order=order;std::unordered_map<std::wstring,size_t> ranks;for(size_t i=0;i<order.size();++i)ranks.emplace(order[i],i);std::stable_sort(f->content->items.begin(),f->content->items.end(),[&](const Item& a,const Item& b){return ranks.at(a.name)<ranks.at(b.name);});f->selected.clear();for(size_t i=0;i<f->content->items.size();++i)if(std::find(selected.begin(),selected.end(),f->content->items[i].path)!=selected.end())f->selected.insert(static_cast<int>(i));return true;
+}
 class DropTarget final:public IDropTarget,public IDropSource {
- LONG refs=1;Frame* f;bool accepted=false,linkOnly=false,enteredInteraction=false;
- void Leave(){f->dropHover=false;f->entered=0;if(enteredInteraction){--interaction;enteredInteraction=false;}Paint(f);}
+ LONG refs=1;Frame* f;bool accepted=false,linkOnly=false,enteredInteraction=false,local=false;DWORD allowed=0;
+ void Position(POINTL point){if(!local||!accepted)return;int beforeScroll=f->scroll;POINT pos{point.x,point.y};ScreenToClient(f->window,&pos);auto grid=f->Grid();RECT client{};GetClientRect(f->window,&client);auto now=GetTickCount64();if(now-f->lastDragScroll>=180){int next=f->scroll;if(pos.y<grid.top+f->D(12))--next;else if(pos.y>client.bottom-f->D(24))++next;next=std::clamp(next,0,grid.MaxScroll(static_cast<int>(f->content->items.size())));if(next!=f->scroll){f->scroll=next;f->lastDragScroll=now;}}
+  int slot=grid.Insertion(pos.x,pos.y,f->scroll,static_cast<int>(f->content->items.size()));if(slot!=f->dropSlot||beforeScroll!=f->scroll){f->dropSlot=slot;Paint(f);}}
+ DWORD Effect()const{return accepted?(allowed&(local?DROPEFFECT_MOVE:linkOnly?DROPEFFECT_LINK:DROPEFFECT_MOVE)):DROPEFFECT_NONE;}
+ void Leave(){f->dropSlot=-1;f->dropHover=false;f->entered=0;if(enteredInteraction){--interaction;enteredInteraction=false;}Paint(f);}
 public:
  explicit DropTarget(Frame* value):f(value){}
  HRESULT STDMETHODCALLTYPE QueryInterface(REFIID id,void** out) override{if(!out)return E_POINTER;*out=nullptr;if(id==IID_IUnknown||id==IID_IDropTarget)*out=static_cast<IDropTarget*>(this);else if(id==IID_IDropSource)*out=static_cast<IDropSource*>(this);else return E_NOINTERFACE;AddRef();return S_OK;}
  ULONG STDMETHODCALLTYPE AddRef() override{return static_cast<ULONG>(InterlockedIncrement(&refs));}
  ULONG STDMETHODCALLTYPE Release() override{auto r=InterlockedDecrement(&refs);if(!r)delete this;return static_cast<ULONG>(r);}
- HRESULT STDMETHODCALLTYPE DragEnter(IDataObject* d,DWORD,POINTL,DWORD* effect) override{auto paths=DropPaths(d);accepted=!paths.empty();linkOnly=accepted;for(auto& p:paths)if(_wcsicmp(std::filesystem::path(p).extension().c_str(),L".exe"))linkOnly=false;if(!enteredInteraction){++interaction;enteredInteraction=true;}f->dropHover=accepted;f->entered=GetTickCount64();*effect=accepted?(linkOnly?DROPEFFECT_LINK:DROPEFFECT_MOVE):DROPEFFECT_NONE;Paint(f);return S_OK;}
- HRESULT STDMETHODCALLTYPE DragOver(DWORD,POINTL,DWORD* effect) override{*effect=accepted?(linkOnly?DROPEFFECT_LINK:DROPEFFECT_MOVE):DROPEFFECT_NONE;if(accepted&&!f->large&&!f->dragging&&GetTickCount64()-f->entered>650)Expand(f,true);return S_OK;}
+ HRESULT STDMETHODCALLTYPE DragEnter(IDataObject* d,DWORD,POINTL point,DWORD* effect) override{auto paths=DropPaths(d);allowed=*effect;accepted=!paths.empty();local=dragSource==f;linkOnly=accepted&&!local;for(auto& p:paths)if(_wcsicmp(std::filesystem::path(p).extension().c_str(),L".exe"))linkOnly=false;if(!enteredInteraction){++interaction;enteredInteraction=true;}f->dropHover=accepted;f->entered=GetTickCount64();*effect=Effect();Position(point);Paint(f);return S_OK;}
+ HRESULT STDMETHODCALLTYPE DragOver(DWORD,POINTL point,DWORD* effect) override{*effect=Effect();Position(point);if(accepted&&!local&&!f->large&&!f->dragging&&GetTickCount64()-f->entered>650)Expand(f,true);return S_OK;}
  HRESULT STDMETHODCALLTYPE DragLeave() override{Leave();return S_OK;}
- HRESULT STDMETHODCALLTYPE Drop(IDataObject* data,DWORD,POINTL point,DWORD* effect) override{Interact guard;auto paths=DropPaths(data);*effect=DROPEFFECT_NONE;bool local=!paths.empty();for(auto& p:paths)if(_wcsicmp(std::filesystem::path(p).parent_path().c_str(),f->box.path.c_str()))local=false;
-  if(local){POINT pos{point.x,point.y};ScreenToClient(f->window,&pos);int index=f->Hit(pos);std::vector<std::wstring> order;for(auto& item:f->content->items)order.push_back(item.path);if(index<0)index=static_cast<int>(order.size());for(auto& p:paths){auto it=std::find(order.begin(),order.end(),p);if(it!=order.end()){if(it-order.begin()<index)--index;order.erase(it);}}index=std::clamp(index,0,static_cast<int>(order.size()));order.insert(order.begin()+index,paths.begin(),paths.end());f->box.order.clear();for(auto& p:order)f->box.order.push_back(std::filesystem::path(p).filename().wstring());Persist();}
-  else Failure(f->window,desk::Transfer(f->window,paths,f->box.path));Leave();f->Scan();return S_OK;}
- HRESULT STDMETHODCALLTYPE QueryContinueDrag(BOOL escape,DWORD keys) override{return escape?DRAGDROP_S_CANCEL:!(keys&MK_LBUTTON)?DRAGDROP_S_DROP:S_OK;}
+ HRESULT STDMETHODCALLTYPE Drop(IDataObject* data,DWORD,POINTL point,DWORD* effect) override{Interact guard;auto paths=DropPaths(data);*effect=DROPEFFECT_NONE;
+  if(local&&dragSource==f&&accepted){Position(point);f->internalDrop=true;if(ReorderFrame(f,paths,f->dropSlot))*effect=DROPEFFECT_MOVE;else MessageBoxW(f->window,L"排序未能保存，请重试。文件未被移动。",L"TidyDesk",MB_OK|MB_ICONWARNING);Leave();return S_OK;}
+  bool sameFolder=!paths.empty();for(const auto& path:paths)if(_wcsicmp(std::filesystem::path(path).parent_path().lexically_normal().c_str(),std::filesystem::path(f->box.path).lexically_normal().c_str()))sameFolder=false;
+  if(accepted&&!sameFolder)Failure(f->window,desk::Transfer(f->window,paths,f->box.path));Leave();f->Scan();return S_OK;}
+ HRESULT STDMETHODCALLTYPE QueryContinueDrag(BOOL escape,DWORD keys) override{if(f->large&&shade){POINT point{};RECT bounds{};GetCursorPos(&point);GetWindowRect(f->window,&bounds);ShowWindow(shade,PtInRect(&bounds,point)?SW_SHOWNOACTIVATE:SW_HIDE);}return escape?DRAGDROP_S_CANCEL:!(keys&MK_LBUTTON)?DRAGDROP_S_DROP:S_OK;}
  HRESULT STDMETHODCALLTYPE GiveFeedback(DWORD) override{return DRAGDROP_S_USEDEFAULTCURSORS;}
 };
 std::vector<std::wstring> Selected(Frame* f){std::vector<std::wstring> paths;for(int i:f->selected)if(i>=0&&i<static_cast<int>(f->content->items.size()))paths.push_back(f->content->items[static_cast<size_t>(i)].path);return paths;}
-void DragOut(Frame* f){Interact guard;auto selected=Selected(f);if(selected.empty())return;f->dragging=true;HideShade();
+void DragOut(Frame* f){Interact guard;auto selected=Selected(f);if(selected.empty())return;f->dragging=true;f->internalDrop=false;dragSource=f;HRESULT outcome=DRAGDROP_S_CANCEL;
  auto parent=ILCreateFromPathW(f->box.path.c_str());std::vector<PIDLIST_ABSOLUTE> full;std::vector<PCUITEMID_CHILD> children;for(auto& p:selected){auto id=ILCreateFromPathW(p.c_str());if(id){full.push_back(id);children.push_back(ILFindLastID(id));}}
- ComPtr<IDataObject> data;if(parent&&!children.empty()&&SUCCEEDED(SHCreateDataObject(parent,static_cast<UINT>(children.size()),children.data(),nullptr,IID_PPV_ARGS(&data)))){auto source=new DropTarget(f);DWORD effect=0;DoDragDrop(data.Get(),source,DROPEFFECT_MOVE|DROPEFFECT_COPY|DROPEFFECT_LINK,&effect);source->Release();}for(auto p:full)ILFree(p);ILFree(parent);f->dragging=false;if(f->large)Expand(f,false);f->Scan();}
+ ComPtr<IDataObject> data;if(parent&&!children.empty()&&SUCCEEDED(SHCreateDataObject(parent,static_cast<UINT>(children.size()),children.data(),nullptr,IID_PPV_ARGS(&data)))){auto source=new DropTarget(f);DWORD effect=0;outcome=DoDragDrop(data.Get(),source,DROPEFFECT_MOVE|DROPEFFECT_COPY|DROPEFFECT_LINK,&effect);source->Release();}for(auto p:full)ILFree(p);ILFree(parent);f->dragging=false;dragSource=nullptr;f->dropSlot=-1;if(f->large){if(f->internalDrop||outcome==DRAGDROP_S_CANCEL){if(shade)ShowWindow(shade,SW_SHOWNOACTIVATE);}else Expand(f,false);}if(!f->internalDrop)f->Scan();Paint(f);}
 void FileMenu(Frame* f,POINT point){Interact guard;auto paths=Selected(f);if(paths.empty())return;ComPtr<IShellFolder> folder;PCUITEMID_CHILD child=nullptr;auto first=ILCreateFromPathW(paths[0].c_str());if(!first)return;
  if(SUCCEEDED(SHBindToParent(first,IID_PPV_ARGS(&folder),&child))){std::vector<PIDLIST_ABSOLUTE> full;std::vector<PCUITEMID_CHILD> ids;for(auto& path:paths){auto id=ILCreateFromPathW(path.c_str());if(id){full.push_back(id);ids.push_back(ILFindLastID(id));}}ComPtr<IContextMenu> menu;
   if(!ids.empty()&&SUCCEEDED(folder->GetUIObjectOf(f->window,static_cast<UINT>(ids.size()),ids.data(),IID_IContextMenu,nullptr,reinterpret_cast<void**>(menu.GetAddressOf())))){menu.As(&f->menu2);menu.As(&f->menu3);auto popup=CreatePopupMenu();menu->QueryContextMenu(popup,0,1,0x7fff,CMF_NORMAL);AppendMenuW(popup,MF_SEPARATOR,0,nullptr);AppendMenuW(popup,MF_STRING,0x8001,L"重命名收纳框");AppendMenuW(popup,MF_STRING,0x8002,f->large?L"收起收纳框":L"展开收纳框");AppendMenuW(popup,MF_STRING,0x8005,L"解散收纳框…");SetForegroundWindow(f->window);int cmd=TrackPopupMenu(popup,TPM_RETURNCMD|TPM_RIGHTBUTTON,point.x,point.y,0,f->window,nullptr);if(cmd>0&&cmd<0x8000){CMINVOKECOMMANDINFOEX invoke{};invoke.cbSize=sizeof(invoke);invoke.hwnd=f->window;invoke.fMask=CMIC_MASK_UNICODE;invoke.lpVerb=MAKEINTRESOURCEA(cmd-1);invoke.lpVerbW=MAKEINTRESOURCEW(cmd-1);invoke.nShow=SW_SHOWNORMAL;Failure(f->window,menu->InvokeCommand(reinterpret_cast<CMINVOKECOMMANDINFO*>(&invoke)));}DestroyMenu(popup);f->menu2.Reset();f->menu3.Reset();if(cmd>=0x8000)MenuCommand(f,cmd-0x8000);}
@@ -206,7 +222,8 @@ void NewBox(){try{auto boxes=desk::Load();if(boxes.size()>=64)return;desk::Box b
  }catch(...){MessageBoxW(controller,L"无法创建收纳文件夹，请检查文档目录的权限。",L"TidyDesk",MB_OK|MB_ICONWARNING);}}
 LRESULT CALLBACK Controller(HWND w,UINT m,WPARAM wp,LPARAM lp){if(m==shellMessage&&shellMessage){SetTimer(w,1,1500,nullptr);return 0;}switch(m){case WM_APP+1:Rebuild();return 0;case WM_APP+4:return wp<frames.size()?static_cast<LRESULT>(frames[wp]->content->items.size()+1):0;case WM_APP+6:if(wp<frames.size())Expand(frames[wp].get(),true);return 0;case NewCollection:NewBox();return 0;case WM_DISPLAYCHANGE:case WM_DPICHANGED:SetTimer(w,1,400,nullptr);return 0;case WM_TIMER:if(wp==2){if(!interaction){KillTimer(w,2);DestroyWindow(w);}return 0;}KillTimer(w,1);Rebuild();return 0;case WM_CLOSE:if(interaction){SetTimer(w,2,250,nullptr);return 0;}DestroyWindow(w);return 0;case WM_DESTROY:rebuilding=true;HideShade();expanded=nullptr;frames.clear();PostQuitMessage(0);return 0;}return DefWindowProcW(w,m,wp,lp);}
 }
-int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,PWSTR command,int){
+int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,PWSTR command,int){if(wcscmp(command,L"--test-order")==0){auto result=desk::OrderTest();if(result)return result;auto grid=desk::Grid::Make(330,220,48);if(grid.Insertion(grid.left+grid.cellWidth/4,grid.top+10,0,10)!=0||grid.Insertion(grid.left+grid.cellWidth*3/4,grid.top+10,0,10)!=1)return 6;if(grid.Insertion(grid.left,grid.top+10,1,10)!=grid.columns||grid.Insertion(2000,2000,0,2)!=2)return 7;return desk::OrderPersistenceTest();}
+
  int argc=0;auto argv=CommandLineToArgvW(GetCommandLineW(),&argc);if(argv&&argc==4&&wcscmp(argv[1],L"--icon-preview")==0){int result=desk::ExportCollectionIcon(argv[2],argv[3]);LocalFree(argv);return result;}if(argv)LocalFree(argv);
  if(wcscmp(command,L"--test-rename")==0)return desk::RenameTest();if(wcscmp(command,L"--test-shortcut-icon")==0)return desk::ShortcutIconTest();if(wcscmp(command,L"--test-icon-pixels")==0)return desk::IconPixelsTest();if(wcscmp(command,L"--test-model")==0)return desk::ModelTest();if(wcscmp(command,L"--test-transfer")==0)return desk::TransferTest();if(wcscmp(command,L"--test-geometry")==0)return desk::GeometryTest();bool testFrame=wcscmp(command,L"--test-frame")==0;bool create=wcscmp(command,L"--new")==0;if(*command&&!create&&!testFrame)return 2;
  HANDLE single=CreateMutexW(nullptr,FALSE,testFrame?L"Local\\TidyDesk.Desktop.FrameTest":L"Local\\TidyDesk.Desktop.Singleton");if(!single)return 3;if(GetLastError()==ERROR_ALREADY_EXISTS){if(create){HWND existing=nullptr;for(int retry=0;retry<60&&!existing;++retry){existing=FindWindowW(L"TidyDesk.Desktop.Controller",nullptr);if(!existing)Sleep(50);}if(!existing||!PostMessageW(existing,NewCollection,0,0))MessageBoxW(nullptr,L"收纳模块尚未就绪，请稍后重试。",L"TidyDesk",MB_OK|MB_ICONERROR);}CloseHandle(single);return 0;}

@@ -10,6 +10,8 @@ std::filesystem::path DataDir();
 std::filesystem::path CollectionsDir();
 std::vector<Box> Load();
 bool Save(const std::vector<Box>& boxes);
+bool SaveOrder(const std::wstring& id,const std::vector<std::wstring>& order);
+int OrderPersistenceTest();
 bool RenameBox(const std::wstring& id,const std::wstring& name,std::wstring& error);
 int RenameTest();
 bool NewBox(HWND owner, bool existing);

@@ -48,6 +48,15 @@ bool Save(const std::vector<Box>& boxes) {
  }catch(...){return false;}
 }
 void Notify(){if(auto w=FindWindowW(L"TidyDesk.Desktop.Controller",nullptr))PostMessageW(w,WM_APP+1,0,0);}
+bool SaveOrder(const std::wstring& id,const std::vector<std::wstring>& order){
+ HANDLE mutex=CreateMutexW(nullptr,FALSE,L"Local\\TidyDesk.Layout.Writer");if(!mutex)return false;auto wait=WaitForSingleObject(mutex,3000);if(wait!=WAIT_OBJECT_0&&wait!=WAIT_ABANDONED){CloseHandle(mutex);return false;}struct Unlock{HANDLE h;~Unlock(){ReleaseMutex(h);CloseHandle(h);}} unlock{mutex};
+ try{auto boxes=Load();auto found=std::find_if(boxes.begin(),boxes.end(),[&](const Box& box){return box.id==id;});if(found==boxes.end())return false;found->order=order;return Save(boxes);}catch(...){return false;}
+}
+int OrderPersistenceTest(){
+ testRoot=std::filesystem::temp_directory_path()/(L"TidyDesk-order-"+std::to_wstring(GetCurrentProcessId()));int result=0;
+ {Box box;box.id=L"order";box.name=L"已重命名";box.path=(testRoot/L"文件").wstring();std::filesystem::create_directories(box.path);{std::ofstream file(std::filesystem::path(box.path)/L"保留.txt");file<<"unchanged";}Box other=box;other.id=L"other";other.name=L"其他";if(!Save({box,other})||!SaveOrder(box.id,{L"二.lnk",L"一.lnk"}))result=1;auto loaded=Load();if(loaded.size()!=2||loaded[0].order!=std::vector<std::wstring>{L"二.lnk",L"一.lnk"}||loaded[0].name!=box.name||loaded[1].name!=other.name)result=2;if(SaveOrder(L"missing",{})||!std::filesystem::exists(std::filesystem::path(box.path)/L"保留.txt"))result=3;}
+ std::filesystem::remove_all(testRoot);testRoot.clear();return result;
+}
 bool RenameBox(const std::wstring& id,const std::wstring& name,std::wstring& error){
  if(name.empty()||name.size()>80||name.back()==L'.'||name.back()==L' '||name.front()==L' '||name.find_first_of(L"<>:\"/\\|?*\r\n\t")!=std::wstring::npos){error=L"名称不能为空，不能包含路径符号或首尾空格。";return false;}
  auto stem=name.substr(0,name.find(L'.'));std::transform(stem.begin(),stem.end(),stem.begin(),[](wchar_t c){return static_cast<wchar_t>(towupper(c));});if(stem==L"CON"||stem==L"PRN"||stem==L"AUX"||stem==L"NUL"||(stem.size()==4&&(stem.substr(0,3)==L"COM"||stem.substr(0,3)==L"LPT")&&stem[3]>=L'1'&&stem[3]<=L'9')){error=L"不能使用 Windows 保留名称。";return false;}
