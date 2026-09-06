@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include "shared.h"
 #include "settings.h"
+#include "permission.h"
 #include "desktop_model.h"
 #include "window_rule.h"
 #include <shellapi.h>
@@ -267,6 +268,7 @@ LRESULT CALLBACK WindowProc(HWND wnd, UINT message, WPARAM wparam, LPARAM lparam
 }
 }
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR command, int) {
+    if(wcscmp(command,L"--retire-permission-service")==0)return static_cast<int>(permission::Retire());
     if (wcscmp(command, L"--test-settings") == 0) return TestSettings();
     if (wcscmp(command, L"--test-window-rule") == 0) return TestWindowRule();
     if (wcscmp(command, L"--self-test") == 0) {

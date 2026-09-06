@@ -1,0 +1,17 @@
+"""Fail the build if the withdrawn elevation/bootstrap path is reintroduced."""
+from pathlib import Path
+import re
+
+root = Path(__file__).parent
+for path in root.iterdir():
+    if path.suffix not in {'.cpp', '.h', '.iss'}:
+        continue
+    text = path.read_text(encoding='utf-8-sig')
+    patterns = [r'\bCreateServiceW\s*\(', r'\bStartServiceCtrlDispatcherW\s*\(',
+                r'"runas"', r"'runas'", r'--install-service']
+    for pattern in patterns:
+        if re.search(pattern, text):
+            raise SystemExit(f'Withdrawn elevation path in {path.name}: {pattern}')
+assert 'TidyDeskIcons.exe' not in (root/'installer.iss').read_text(encoding='utf-8-sig')
+assert 'permission_service.h' not in (root/'arrows.cpp').read_text(encoding='utf-8-sig')
+print('No product elevation/bootstrap entry; test helper excluded from installer.')

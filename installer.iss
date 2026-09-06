@@ -1,5 +1,5 @@
 ; SPDX-License-Identifier: MIT
-#define AppVersion "0.4.8"
+#define AppVersion "0.4.9"
 [Setup]
 AppId={{F33B8E61-F180-40F4-9377-455BBBCE67A1}
 AppName=TidyDesk
@@ -36,10 +36,10 @@ Source: "build\Release\TidyDeskTap.dll"; DestDir: "{app}\{#AppVersion}"; Flags: 
 Source: "build\Release\TidyDeskAttach.exe"; DestDir: "{app}\{#AppVersion}"; Flags: ignoreversion
 Source: "build\Release\TidyDeskStop.exe"; DestDir: "{app}\{#AppVersion}"; Flags: ignoreversion
 Source: "build\Release\TidyDeskDesktop.exe"; DestDir: "{app}\{#AppVersion}"; Flags: ignoreversion
-Source: "build\Release\TidyDeskIcons.exe"; DestDir: "{app}\{#AppVersion}"; Flags: ignoreversion
 Source: "blank.ico"; DestDir: "{app}"; Flags: ignoreversion uninsneveruninstall
 Source: "LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 Source: "README.md"; DestDir: "{app}"; Flags: ignoreversion
+Source: "SECURITY.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "PERMISSIONS.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "INSTALL-NOTES.txt"; DestDir: "{app}"; Flags: ignoreversion
 
@@ -118,21 +118,11 @@ begin
 end;
 
 function InitializeUninstall(): Boolean;
-var Saved: Cardinal; Code: Integer;
+var Code: Integer;
 begin
-  Result := True;
-  // Reuse the authorized service to restore arrows and revoke its registration.
-  Result := Exec(ExpandConstant('{app}\{#AppVersion}\TidyDeskIcons.exe'), '--service-uninstall', '', SW_HIDE, ewWaitUntilTerminated, Code);
+  Result := Exec(ExpandConstant('{app}\{#AppVersion}\TidyDesk.exe'), '--retire-permission-service', '', SW_HIDE, ewWaitUntilTerminated, Code);
   Result := Result and (Code = 0);
-  if not Result then begin
-    MsgBox('权限助手尚未停用，卸载已取消。请在常规页停用管理员权限后重试。', mbInformation, MB_OK);
-    Exit;
-  end;
-  if RegQueryDWordValue(HKLM64, 'SOFTWARE\TidyDesk\ArrowBackup', 'Saved', Saved) and (Saved = 1) then begin
-    Result := ShellExec('runas', ExpandConstant('{app}\{#AppVersion}\TidyDeskIcons.exe'), '--restore', '', SW_SHOWNORMAL, ewWaitUntilTerminated, Code);
-    Result := Result and (Code = 0);
-    if not Result then MsgBox('图标设置尚未恢复，卸载已取消。请先在图标页恢复原设置。', mbInformation, MB_OK);
-  end;
+  if not Result then MsgBox('旧版权限助手尚未清理，卸载已取消。请先在常规页清理旧助手；无法清理时请联系 Windows 管理员。不会自动提权。', mbInformation, MB_OK);
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
