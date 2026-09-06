@@ -1,5 +1,5 @@
 ; SPDX-License-Identifier: MIT
-#define AppVersion "0.4.7"
+#define AppVersion "0.4.8"
 [Setup]
 AppId={{F33B8E61-F180-40F4-9377-455BBBCE67A1}
 AppName=TidyDesk
@@ -40,6 +40,7 @@ Source: "build\Release\TidyDeskIcons.exe"; DestDir: "{app}\{#AppVersion}"; Flags
 Source: "blank.ico"; DestDir: "{app}"; Flags: ignoreversion uninsneveruninstall
 Source: "LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 Source: "README.md"; DestDir: "{app}"; Flags: ignoreversion
+Source: "PERMISSIONS.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "INSTALL-NOTES.txt"; DestDir: "{app}"; Flags: ignoreversion
 
 [Registry]
@@ -120,6 +121,13 @@ function InitializeUninstall(): Boolean;
 var Saved: Cardinal; Code: Integer;
 begin
   Result := True;
+  // Reuse the authorized service to restore arrows and revoke its registration.
+  Result := Exec(ExpandConstant('{app}\{#AppVersion}\TidyDeskIcons.exe'), '--service-uninstall', '', SW_HIDE, ewWaitUntilTerminated, Code);
+  Result := Result and (Code = 0);
+  if not Result then begin
+    MsgBox('权限助手尚未停用，卸载已取消。请在常规页停用管理员权限后重试。', mbInformation, MB_OK);
+    Exit;
+  end;
   if RegQueryDWordValue(HKLM64, 'SOFTWARE\TidyDesk\ArrowBackup', 'Saved', Saved) and (Saved = 1) then begin
     Result := ShellExec('runas', ExpandConstant('{app}\{#AppVersion}\TidyDeskIcons.exe'), '--restore', '', SW_SHOWNORMAL, ewWaitUntilTerminated, Code);
     Result := Result and (Code = 0);
