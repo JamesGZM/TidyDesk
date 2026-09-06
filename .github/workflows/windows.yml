@@ -15,6 +15,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+      - name: Verify retired elevation path
+        run: python verify_security.py
       - name: Configure native x64 build
         run: cmake -S . -B build -A x64
       - name: Build
@@ -25,7 +27,9 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Path package | Out-Null
-          Copy-Item build/Release/*.exe, build/Release/TidyDeskTap.dll, LICENSE, README.md, PERMISSIONS.md -Destination package
+          Get-ChildItem build/Release/*.exe | Where-Object Name -ne 'TidyDeskIcons.exe' | Copy-Item -Destination package
+          Copy-Item build/Release/TidyDeskTap.dll, LICENSE, README.md, PERMISSIONS.md, SECURITY.md -Destination package
+          if (Test-Path package/TidyDeskIcons.exe) { throw 'Test-only helper entered package' }
           Copy-Item blank.ico -Destination package
           Copy-Item build/settings-*.png -Destination package
           Get-ChildItem package -File | Where-Object Extension -in '.exe','.dll' | Get-FileHash -Algorithm SHA256 | ForEach-Object { "$($_.Hash.ToLower())  $([IO.Path]::GetFileName($_.Path))" } | Set-Content package/SHA256SUMS.txt
@@ -38,28 +42,23 @@ jobs:
         shell: pwsh
         run: |
           $testInstall = Join-Path $env:RUNNER_TEMP 'TidyDesk-install-test'
-          $setup = (Resolve-Path package/TidyDesk-0.4.8-Setup.exe).Path
+          $setup = (Resolve-Path package/TidyDesk-0.4.9-Setup.exe).Path
           $setupProcess = Start-Process $setup -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/TASKS=',"/DIR=`"$testInstall`"") -WindowStyle Hidden -PassThru -Wait
           if ($setupProcess.ExitCode -ne 0) { throw "Install failed: $($setupProcess.ExitCode)" }
-          if (!(Test-Path "$testInstall/0.4.8/TidyDesk.exe")) { throw 'Installed application missing' }
+          if (!(Test-Path "$testInstall/0.4.9/TidyDesk.exe")) { throw 'Installed application missing' }
           $uninstallKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\{F33B8E61-F180-40F4-9377-455BBBCE67A1}_is1'
           if (!(Test-Path $uninstallKey)) { throw 'Uninstall registration missing' }
           $menuKey = 'HKCU:\Software\Classes\DesktopBackground\Shell\TidyDesk.New'
           if (!(Test-Path $menuKey)) { throw 'Desktop new-collection menu missing' }
           $shortcut = Join-Path ([Environment]::GetFolderPath('StartMenu')) 'Programs/TidyDesk/TidyDesk.lnk'
           if (!(Test-Path $shortcut)) { throw 'Start menu shortcut missing' }
-          # Verify uninstall with the opt-in service actually enabled, on this disposable runner only.
-          $ownerSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-          $permissionProcess = Start-Process "$testInstall/0.4.8/TidyDeskIcons.exe" -ArgumentList @('--install-service', $ownerSid) -WindowStyle Hidden -PassThru -Wait
-          if ($permissionProcess.ExitCode -ne 0) { throw "Permission enable failed: $($permissionProcess.ExitCode)" }
-          if ((Get-Service 'TidyDesk.SystemSettings').Status -ne 'Running') { throw 'Permission service not running' }
           $uninstallProcess = Start-Process "$testInstall/unins000.exe" -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -WindowStyle Hidden -PassThru -Wait
           if ($uninstallProcess.ExitCode -ne 0) { throw 'Uninstall failed' }
-          if (Test-Path "$testInstall/0.4.8/TidyDesk.exe") { throw 'Application remained after uninstall' }
+          if (Test-Path "$testInstall/0.4.9/TidyDesk.exe") { throw 'Application remained after uninstall' }
           if (Test-Path $uninstallKey) { throw 'Uninstall registration remained' }
           if (Test-Path $menuKey) { throw 'Desktop menu remained after uninstall' }
           if (Test-Path $shortcut) { throw 'Start menu shortcut remained' }
-          if (Get-Service 'TidyDesk.SystemSettings' -ErrorAction SilentlyContinue) { throw 'Permission service remained after uninstall' }
+          if (Test-Path "$testInstall/0.4.9/TidyDeskIcons.exe") { throw 'Retired helper shipped' }
           Get-FileHash $setup -Algorithm SHA256 | ForEach-Object { "$($_.Hash.ToLower())  $([IO.Path]::GetFileName($_.Path))" } | Set-Content package/INSTALLER-SHA256.txt
       - uses: actions/upload-artifact@v4
         with:
