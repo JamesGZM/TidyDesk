@@ -40,6 +40,17 @@ inline bool ProtectedDirectory(const std::filesystem::path& dir){
  SECURITY_ATTRIBUTES sa{sizeof(sa),expected,FALSE};bool ok=CreateDirectoryW(dir.c_str(),&sa)!=FALSE;if(!ok&&GetLastError()==ERROR_ALREADY_EXISTS){auto attr=GetFileAttributesW(dir.c_str());if(attr!=INVALID_FILE_ATTRIBUTES&&(attr&FILE_ATTRIBUTE_DIRECTORY)&&!(attr&FILE_ATTRIBUTE_REPARSE_POINT)){PSECURITY_DESCRIPTOR actual=nullptr;PSID owner=nullptr;PACL acl=nullptr;if(GetNamedSecurityInfoW(dir.c_str(),SE_FILE_OBJECT,OWNER_SECURITY_INFORMATION|DACL_SECURITY_INFORMATION,&owner,nullptr,&acl,nullptr,&actual)==ERROR_SUCCESS){PSID wanted=nullptr;PACL wantedAcl=nullptr;BOOL ignored=FALSE,present=FALSE;GetSecurityDescriptorOwner(expected,&wanted,&ignored);GetSecurityDescriptorDacl(expected,&present,&wantedAcl,&ignored);ok=owner&&acl&&EqualSid(owner,wanted)&&acl->AclSize==wantedAcl->AclSize&&memcmp(acl,wantedAcl,acl->AclSize)==0;LocalFree(actual);}}}
  LocalFree(expected);return ok;
 }
+inline DWORD CopyProtectedExecutable(const wchar_t* source,const std::filesystem::path& target){
+ PSECURITY_DESCRIPTOR sd=nullptr;if(!ConvertStringSecurityDescriptorToSecurityDescriptorW(L"O:BAG:BAD:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;0x1200a9;;;BU)",SDDL_REVISION_1,&sd,nullptr))return GetLastError();
+ auto temp=target;temp+=L".new-"+std::to_wstring(GetCurrentProcessId())+L"-"+std::to_wstring(GetTickCount64());
+ DWORD result=ERROR_SUCCESS;
+ {SECURITY_ATTRIBUTES sa{sizeof(sa),sd,FALSE};Handle input(CreateFileW(source,GENERIC_READ,FILE_SHARE_READ,nullptr,OPEN_EXISTING,FILE_FLAG_SEQUENTIAL_SCAN,nullptr));if(input.value==INVALID_HANDLE_VALUE){result=GetLastError();LocalFree(sd);return result;}Handle output(CreateFileW(temp.c_str(),GENERIC_WRITE,0,&sa,CREATE_NEW,FILE_ATTRIBUTE_NORMAL,nullptr));if(output.value==INVALID_HANDLE_VALUE)result=GetLastError();LocalFree(sd);
+  if(output.value==INVALID_HANDLE_VALUE)return result;
+  else{std::vector<BYTE> buffer(65536);DWORD read=0,written=0;for(;;){if(!ReadFile(input.value,buffer.data(),static_cast<DWORD>(buffer.size()),&read,nullptr)){result=GetLastError();break;}if(!read)break;if(!WriteFile(output.value,buffer.data(),read,&written,nullptr)||written!=read){result=ERROR_WRITE_FAULT;break;}}if(!result&&!FlushFileBuffers(output.value))result=GetLastError();}
+ }
+ if(!result&&!MoveFileExW(temp.c_str(),target.c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH))result=GetLastError();
+ if(result)DeleteFileW(temp.c_str());return result;
+}
 inline DWORD Install(const std::wstring& owner){
  if(!IsUserAnAdmin())return ERROR_ELEVATION_REQUIRED;PSID parsed=nullptr;if(owner.size()>184||!ConvertStringSidToSidW(owner.c_str(),&parsed))return ERROR_INVALID_SID;bool valid=IsValidSid(parsed)!=FALSE;LocalFree(parsed);if(!valid)return ERROR_INVALID_SID;
  ServiceHandle manager(OpenSCManagerW(nullptr,nullptr,SC_MANAGER_CREATE_SERVICE));if(!manager.value)return GetLastError();
@@ -49,7 +60,7 @@ inline DWORD Install(const std::wstring& owner){
  auto dir=SecureDirectory();if(dir.empty()||!ProtectedDirectory(dir))return ERROR_ACCESS_DENIED;
  wchar_t self[32768]{};if(!GetModuleFileNameW(nullptr,self,32768))return GetLastError();auto target=dir/L"TidyDeskSystem.exe";
  // A protected directory prevents replacement by a non-elevated process.
- if(!CopyFileW(self,target.c_str(),FALSE))return GetLastError();
+ auto copyResult=CopyProtectedExecutable(self,target);if(copyResult)return copyResult;
  HKEY key=nullptr;auto error=RegCreateKeyExW(HKEY_LOCAL_MACHINE,Key,0,nullptr,0,KEY_WRITE|KEY_WOW64_64KEY,nullptr,&key,nullptr);if(error)return static_cast<DWORD>(error);error=RegSetValueExW(key,L"Owner",0,REG_SZ,reinterpret_cast<const BYTE*>(owner.c_str()),static_cast<DWORD>((owner.size()+1)*sizeof(wchar_t)));RegCloseKey(key);if(error)return static_cast<DWORD>(error);
  auto command=L"\""+target.wstring()+L"\" --service";ServiceHandle service(CreateServiceW(manager.value,Service,L"TidyDesk 系统设置助手",SERVICE_START|DELETE,SERVICE_WIN32_OWN_PROCESS,SERVICE_AUTO_START,SERVICE_ERROR_NORMAL,command.c_str(),nullptr,nullptr,nullptr,nullptr,nullptr));if(!service.value)return GetLastError();if(!StartServiceW(service.value,0,nullptr)){auto result=GetLastError();DeleteService(service.value);return result;}return ERROR_SUCCESS;
 }

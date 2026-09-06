@@ -40,7 +40,8 @@ int PermissionIntegrationTest(){
  // A standard-user token can use the fixed operations, but not create a pipe instance.
  HANDLE token=nullptr;if(!OpenProcessToken(GetCurrentProcess(),TOKEN_DUPLICATE|TOKEN_QUERY,&token))return 36;
  permission::Handle original(token);HANDLE limited=nullptr;BYTE adminSid[SECURITY_MAX_SID_SIZE]{};DWORD sidBytes=sizeof(adminSid);if(!CreateWellKnownSid(WinBuiltinAdministratorsSid,nullptr,adminSid,&sidBytes))return 37;SID_AND_ATTRIBUTES disable{adminSid,0};if(!CreateRestrictedToken(token,DISABLE_MAX_PRIVILEGE,1,&disable,0,nullptr,0,nullptr,&limited))return 37;permission::Handle restricted(limited);
- if(!ImpersonateLoggedOnUser(limited))return 38;auto ping=permission::Call(permission::Operation::Ping);if(!RevertToSelf())ExitProcess(ERROR_ACCESS_DENIED);if(ping)return 39;
+ auto binary=permission::SecureDirectory()/L"TidyDeskSystem.exe";
+ if(!ImpersonateLoggedOnUser(limited))return 38;auto ping=permission::Call(permission::Operation::Ping);HANDLE writable=CreateFileW(binary.c_str(),WRITE_DAC,FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,nullptr,OPEN_EXISTING,0,nullptr);auto writeError=GetLastError();if(writable!=INVALID_HANDLE_VALUE)CloseHandle(writable);if(!RevertToSelf())ExitProcess(ERROR_ACCESS_DENIED);if(ping||writable!=INVALID_HANDLE_VALUE||writeError!=ERROR_ACCESS_DENIED)return 39;
  if(permission::Call(permission::Operation::Disable)||permission::WaitGone())return 40;
  // Re-enabling reuses only a directory with the exact protected ACL we created.
  if(permission::Install(permission::CurrentSid()))return 41;
