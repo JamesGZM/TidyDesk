@@ -1,4 +1,4 @@
-TidyDesk · 整洁桌面 0.4.10 实验版（原 LiteTaskbar）
+TidyDesk · 整洁桌面 0.4.11 实验版（原 LiteTaskbar）
 
 升级保留原安装位置、偏好和自启选择。安装前退出旧版托盘程序；不自动重启 Explorer。新安装默认当前用户目录，不需要开发环境。
 
